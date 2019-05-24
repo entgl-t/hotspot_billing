@@ -17,7 +17,11 @@ Server part run on Linux. PostgreSQL DBMS is used to store data and stored proce
 
 ## Configuration:
 
+
 To setup client side captive portal one can refer to example in folder *chilli_client_conf* 
+
+
+./chilli_client_conf/Chilli_conf.png
 
 
 ## Resources:
