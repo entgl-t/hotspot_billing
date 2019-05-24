@@ -22,6 +22,9 @@ To setup client side captive portal one can refer to example below
 
 ![Alt text](/chilli_client_conf/Chilli_conf.png)
 
+## Captive portal
+
+![Alt text](/chilli_client_conf/LoginPage.png)
 
 
 ## Resources:
