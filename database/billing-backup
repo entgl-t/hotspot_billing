@@ -1,0 +1,3244 @@
+--
+-- PostgreSQL database dump
+--
+
+-- Dumped from database version 9.3.13
+-- Dumped by pg_dump version 9.3.13
+-- Started on 2019-05-23 19:01:37 TJT
+
+SET statement_timeout = 0;
+SET lock_timeout = 0;
+SET client_encoding = 'UTF8';
+SET standard_conforming_strings = on;
+SET check_function_bodies = false;
+SET client_min_messages = warning;
+
+DROP DATABASE radius;
+--
+-- TOC entry 2251 (class 1262 OID 16385)
+-- Name: radius; Type: DATABASE; Schema: -; Owner: radius
+--
+
+CREATE DATABASE radius WITH TEMPLATE = template0 ENCODING = 'UTF8' LC_COLLATE = 'en_US.UTF-8' LC_CTYPE = 'en_US.UTF-8';
+
+
+ALTER DATABASE radius OWNER TO radius;
+
+\connect radius
+
+SET statement_timeout = 0;
+SET lock_timeout = 0;
+SET client_encoding = 'UTF8';
+SET standard_conforming_strings = on;
+SET check_function_bodies = false;
+SET client_min_messages = warning;
+
+--
+-- TOC entry 2252 (class 1262 OID 16385)
+-- Dependencies: 2251
+-- Name: radius; Type: COMMENT; Schema: -; Owner: radius
+--
+
+COMMENT ON DATABASE radius IS 'exit';
+
+
+--
+-- TOC entry 6 (class 2615 OID 2200)
+-- Name: public; Type: SCHEMA; Schema: -; Owner: postgres
+--
+
+CREATE SCHEMA public;
+
+
+ALTER SCHEMA public OWNER TO postgres;
+
+--
+-- TOC entry 2253 (class 0 OID 0)
+-- Dependencies: 6
+-- Name: SCHEMA public; Type: COMMENT; Schema: -; Owner: postgres
+--
+
+COMMENT ON SCHEMA public IS 'standard public schema';
+
+
+--
+-- TOC entry 1 (class 3079 OID 11789)
+-- Name: plpgsql; Type: EXTENSION; Schema: -; Owner: 
+--
+
+CREATE EXTENSION IF NOT EXISTS plpgsql WITH SCHEMA pg_catalog;
+
+
+--
+-- TOC entry 2255 (class 0 OID 0)
+-- Dependencies: 1
+-- Name: EXTENSION plpgsql; Type: COMMENT; Schema: -; Owner: 
+--
+
+COMMENT ON EXTENSION plpgsql IS 'PL/pgSQL procedural language';
+
+
+--
+-- TOC entry 688 (class 2612 OID 16646)
+-- Name: plpython2u; Type: PROCEDURAL LANGUAGE; Schema: -; Owner: postgres
+--
+
+CREATE OR REPLACE PROCEDURAL LANGUAGE plpython2u;
+
+
+ALTER PROCEDURAL LANGUAGE plpython2u OWNER TO postgres;
+
+SET search_path = public, pg_catalog;
+
+--
+-- TOC entry 654 (class 1247 OID 16860)
+-- Name: billing_data; Type: TYPE; Schema: public; Owner: radius
+--
+
+CREATE TYPE billing_data AS (
+	summary_session_time bigint,
+	summary_input_octets bigint,
+	summary_output_octets bigint
+);
+
+
+ALTER TYPE public.billing_data OWNER TO radius;
+
+--
+-- TOC entry 663 (class 1247 OID 25101)
+-- Name: tariff; Type: TYPE; Schema: public; Owner: radius
+--
+
+CREATE TYPE tariff AS (
+	id integer,
+	created_date timestamp without time zone,
+	created_by integer,
+	updated_date time without time zone,
+	updated_by integer,
+	traffic_limit_common bigint,
+	session_time_limit integer,
+	tariffs_group character varying(60),
+	tariff_name character varying(60),
+	traffic_limit_up bigint,
+	traffic_limit_down bigint,
+	shaper_limit_up integer,
+	shaper_limit_down integer
+);
+
+
+ALTER TYPE public.tariff OWNER TO radius;
+
+--
+-- TOC entry 237 (class 1255 OID 33304)
+-- Name: _meta_init_all_functions(); Type: FUNCTION; Schema: public; Owner: radius
+--
+
+CREATE FUNCTION _meta_init_all_functions() RETURNS boolean
+    LANGUAGE plpython2u
+    AS $$try:
+	plpy.execute("select gd_get_tariffs_data()")
+	plpy.execute("select gd_rule_free_traffic_from_0_to_6_hour()")
+	plpy.execute("select gd_get_tariffs_rules_by_affect()")
+	plpy.execute("select gd_apply_all_rules_by_affect()")
+	#plpy.execute("select test_def()")
+	plpy.execute("select gd_block_user()")
+	plpy.execute("select gd_rule_daily_limit_100_mbyte_traffic()")
+	plpy.execute("select gd_call_function_by_time()")
+	plpy.execute("select gd_disactive_user()")
+	plpy.execute("select gd_delete_user_with_history()")
+	plpy.execute("select gd_get_tariffs_users()")
+	plpy.execute("select gd_delete_tariff_completely()")
+except:
+	return False
+
+return True	
+
+$$;
+
+
+ALTER FUNCTION public._meta_init_all_functions() OWNER TO radius;
+
+--
+-- TOC entry 252 (class 1255 OID 41623)
+-- Name: block_user_test(integer); Type: FUNCTION; Schema: public; Owner: radius
+--
+
+CREATE FUNCTION block_user_test(user_id integer) RETURNS boolean
+    LANGUAGE plpython2u
+    AS $$
+plpy.execute("select gd_block_user()")
+return GD["block_user"](user_id)$$;
+
+
+ALTER FUNCTION public.block_user_test(user_id integer) OWNER TO radius;
+
+--
+-- TOC entry 225 (class 1255 OID 16682)
+-- Name: change_of_authorization(); Type: FUNCTION; Schema: public; Owner: radius
+--
+
+CREATE FUNCTION change_of_authorization() RETURNS text
+    LANGUAGE plpython2u
+    AS $$
+  import socket, sys
+  import pyrad.packet
+  from pyrad.client import Client
+  from pyrad.dictionary import Dictionary
+
+  dict_dir = "/usr/share/freeradius/dictionary.chillispot"
+  SECRET = "testing123"
+  NASIP = "192.168.1.1"
+  uname = "test"
+
+  srv = Client(server=NASIP, secret=SECRET, dict=None)
+  req = srv.CreatePacket(code=pyrad.packet.CoARequest, User_Name=uname)
+  req["NAS-IP-Address"] = NASIP
+
+  try:
+      print "Sending COA request"
+      reply = srv.SendPacket(req)
+  except pyrad.client.Timeout:
+      print "NAS does not reply"
+      return "NAS does not reply"
+  except socket.error, error:
+      print "Network error: " + error[1]
+      return "Network error: " + error[1]
+
+  if reply.code == pyrad.packet.CoAACK:
+      print "CoA accepted"
+      return "CoA accepted"
+  elif reply.code == pyrad.packet.CoANAK:
+      print "CoA NAK"
+      return "CoA NAK"
+  else:
+      print reply.code
+  print "Attribures returned by NAS:"
+  for i in reply.keys():
+      print "%s: %s" % (i, reply[i][0])
+  
+$$;
+
+
+ALTER FUNCTION public.change_of_authorization() OWNER TO radius;
+
+--
+-- TOC entry 233 (class 1255 OID 90872)
+-- Name: change_user_status(integer, integer, integer); Type: FUNCTION; Schema: public; Owner: radius
+--
+
+CREATE FUNCTION change_user_status(user_id integer, status_code integer, tariff_id integer) RETURNS boolean
+    LANGUAGE plpython2u
+    AS $_$        change_user_status_plan = plpy.prepare(
+					          "UPDATE bl_users           "+
+						  "SET tariff_type_ref = $1  "+
+						  "   ,status = $2           "+
+						  "WHERE id = $3"
+					          ,[
+						     "int"
+						    ,"int"
+						    ,"int"
+						   ]
+					        );	  	    
+	try:	   
+		plpy.execute(
+			      change_user_status_plan 
+			      ,[
+				  tariff_id
+				 ,status_code
+				 ,user_id
+			       ]
+			    );
+			    
+		return 1
+	except:
+		return 0$_$;
+
+
+ALTER FUNCTION public.change_user_status(user_id integer, status_code integer, tariff_id integer) OWNER TO radius;
+
+--
+-- TOC entry 236 (class 1255 OID 16778)
+-- Name: count_billing_data(); Type: FUNCTION; Schema: public; Owner: radius
+--
+
+CREATE FUNCTION count_billing_data() RETURNS trigger
+    LANGUAGE plpython2u
+    AS $_$#test1 = GD["test_def"]
+plpy.execute("select _meta_init_all_functions()")
+billing_data = TD["new"]
+try: 
+#--------------------------------------------Filling to users tariffs history section
+    select_tariffs_data_plan = plpy.prepare(
+						     " SELECT     a.id"+
+						     "           ,b.login"+
+						     "           ,a.tariff_id"+					    
+						     "           ,a.user_id"  +					    
+						     "           ,a.created_date"+					    
+
+						     " FROM        bl_user_tariffs_history AS a"+ 					 
+
+						     " LEFT JOIN   bl_users AS b ON a.user_id = b.id"+ 					    
+
+						     " WHERE      (b.login = $1) AND (a.created_date < $2::timestamp)"+ 
+						     "                           AND (a.actuality    = 'actual'::text         )"
+						     , ["varchar","timestamp"]
+				            ) 
+   
+    
+    select_summary_billing_data_plan = plpy.prepare(	
+						     " SELECT   SUM(acctsessiontime) ::bigint AS summary_session_time" +
+						     "         ,SUM(acctinputoctets) ::bigint AS summary_input_octets"+
+						     "         ,SUM(acctoutputoctets)::bigint AS summary_output_octets"+ 
+
+						     " FROM     radacct" + 					          
+						  
+						     " WHERE   (username = $1) AND (acctstarttime >= $2::timestamp)"
+
+						     , ["varchar","timestamp"]
+					           ) 
+    					             
+  
+    update_user_tariffs_history_plan = plpy.prepare(
+						     " UPDATE bl_user_tariffs_history"+ 
+
+						     " SET    summary_session_time      = $1"+
+						     "       ,summary_downloaded_octets = $2"+
+						     "       ,summary_uploaded_octets   = $3"+
+						     #"       ,actuality                 = 'noactual'"+
+						     "       ,actuality                 = $4"+
+
+						     " WHERE                       id   = $5"
+
+						     , [
+							  "bigint"
+							 ,"bigint"
+        					         ,"bigint"
+							 ,"text"
+							 ,"int"
+						       ]
+                         			   )
+
+    with plpy.subtransaction():
+    
+	    actual_tariff = plpy.execute(  
+						    select_tariffs_data_plan
+
+						   ,[   
+							billing_data["username"]
+						       ,billing_data["acctstarttime"]
+						    ]
+
+						   ,1
+					);
+	    counted_data  = plpy.execute(
+						    select_summary_billing_data_plan
+
+						    ,[
+						        actual_tariff[0]["login"]
+						       ,actual_tariff[0]["created_date"]
+						     ]
+						     
+						    ,1
+				        );
+            				
+            			        
+				        
+
+	   
+#----------------------------------Controlling tariffs rules
+
+    
+    select_tariffs_rules_plan = plpy.prepare  (
+					       "SELECT  traffic_limit_common"+
+					       "       ,session_time_limit  "+					      	       					     
+					       " FROM bl_tariffs            "+
+					       " WHERE id = $1::int         "
+					     
+					       , ["int"]
+					    )
+   		    
+    					    
+    tariff_data           = plpy.execute    (
+					      select_tariffs_rules_plan
+					      ,[
+						 actual_tariff[0]["tariff_id"]
+					       ]
+					      ,1
+					    );
+    
+   
+#-----------------------------------------Apply rules which affects to total traffic usage  
+   
+    summary_octets =  GD["apply_all_rules_by_affect"]( 
+							 actual_tariff[0]["tariff_id"]
+						 	,'traffic'
+						 	,counted_data[0]["summary_input_octets"]
+						 	,counted_data[0]["summary_output_octets"]
+						 	,actual_tariff[0]["user_id"]
+					             )
+					             
+#-----------------------------------------Apply rules which affects to user access  					             
+    GD["apply_all_rules_by_affect"]                  ( 
+							 actual_tariff[0]["tariff_id"]
+						 	,'access'
+						 	,counted_data[0]["summary_input_octets"]
+						 	,counted_data[0]["summary_output_octets"]
+						 	,actual_tariff[0]["user_id"]
+					             )					             
+    				           
+#-----------------------------------------Write users billing data    		
+    try: 
+		plpy.execute(	      
+				      update_user_tariffs_history_plan
+
+				     ,[
+					counted_data[0]["summary_session_time"]
+				       ,summary_octets["input"]
+				       ,summary_octets["output"]	
+				       ,'noactual' if (	
+							(
+								(tariff_data[0]["traffic_limit_common"] != -1) 
+										and 
+								((summary_octets["input"] + summary_octets["output"]) >= tariff_data[0]["traffic_limit_common"])
+							)								
+							or
+							(
+								(tariff_data[0]["session_time_limit"] != -1) 
+										and 
+								(counted_data[0]["summary_session_time"]  >= tariff_data[0]["session_time_limit"])
+							)				
+						      )
+						   else 'actual'   
+				       ,actual_tariff[0]["id"]
+				      ]
+			    )
+		
+    #plpy.execute(change_actuality_plan, [billing_sum_data["id"]])
+    except plpy.SPIError, e:
+	    print e.args
+
+   
+			 
+except plpy.SPIError, e:
+	    print e.args
+
+
+
+
+
+
+	
+
+
+
+
+
+
+
+
+	   $_$;
+
+
+ALTER FUNCTION public.count_billing_data() OWNER TO radius;
+
+--
+-- TOC entry 228 (class 1255 OID 16736)
+-- Name: create_group_after_tariff(); Type: FUNCTION; Schema: public; Owner: radius
+--
+
+CREATE FUNCTION create_group_after_tariff() RETURNS trigger
+    LANGUAGE plpython2u
+    AS $_$from  plpy import spiexceptions
+
+new_tariff = TD["new"]
+try:
+    
+    insert_to_radgroupcheck_plan = plpy.prepare(
+						 "INSERT INTO radgroupcheck (groupname, attribute, op, value) "+
+						 "VALUES ($1, $2, $3, $4)"
+						 , [
+						     "varchar"
+						    ,"varchar"
+						    ,"varchar"
+						    ,"varchar"
+						   ]
+					       )
+    insert_to_radgroupreply_plan = plpy.prepare(
+						 "INSERT INTO radgroupreply (groupname, attribute, op, value) "+
+						 "VALUES ($1, $2, $3, $4)"
+						 , [
+						     "varchar"
+						    ,"varchar"
+						    ,"varchar"
+						    ,"varchar"
+						   ]
+					       )
+
+    with plpy.subtransaction():
+		  plpy.execute(
+				  insert_to_radgroupcheck_plan
+				 ,[
+				     new_tariff["tariff_name"]
+				    ,"Auth-Type"
+				    ,"=="
+				    , "Local" 
+				  ]
+			       )
+	   
+	          plpy.execute(
+				  insert_to_radgroupreply_plan
+				 ,[
+				    new_tariff["tariff_name"]
+				   ,"Acct-Status-Type"
+				   ,":="
+				   ,"Interim-Update" 
+				  ]
+			      )
+	          plpy.execute(
+				  insert_to_radgroupreply_plan
+				 ,[
+				    new_tariff["tariff_name"]
+				   ,"Acct-Interim-Interval"
+				   ,":="
+				   ,"60" 
+				  ]
+		              )
+	          plpy.execute(
+			          insert_to_radgroupreply_plan
+			         ,[
+			            new_tariff["tariff_name"]
+			           ,"WISPr-Bandwidth-Max-Up"
+			           ,":="
+			           ,new_tariff["shaper_limit_up"] 
+			          ]
+			      )
+		  plpy.execute(
+				  insert_to_radgroupreply_plan
+				 ,[
+				    new_tariff["tariff_name"]
+				   ,"WISPr-Bandwidth-Max-Down"
+				   ,":="
+				   ,new_tariff["shaper_limit_down"] 
+				  ]
+			      )
+
+except plpy.SPIError, e:
+	return e.args
+	$_$;
+
+
+ALTER FUNCTION public.create_group_after_tariff() OWNER TO radius;
+
+--
+-- TOC entry 232 (class 1255 OID 16738)
+-- Name: create_raduser_after_user(); Type: FUNCTION; Schema: public; Owner: radius
+--
+
+CREATE FUNCTION create_raduser_after_user() RETURNS trigger
+    LANGUAGE plpython2u
+    AS $_$from  plpy import spiexceptions
+if TD["event"] == "INSERT":
+	new_user = TD["new"]
+	try: 
+	    #Create nas level access
+	    insert_to_radcheck_plan = plpy.prepare(
+					            "INSERT INTO radcheck (username, attribute, op, value) " +
+					            "VALUES ($1, $2, $3, $4)"
+					           ,[
+						      "varchar"
+						      ,"varchar"
+						      ,"varchar"
+						      ,"varchar"
+						    ]
+					          )
+	    insert_to_radusergroup_plan = plpy.prepare(
+							"INSERT INTO radusergroup (username, groupname, priority) "+
+							"VALUES ($1, $2, $3)"
+							,[
+							    "varchar"
+							   ,"varchar"
+							   ,"int"
+							  ]
+						      )
+	    #Create plan  to tariffs history
+	    insert_to_user_tariffs_history_plan = plpy.prepare(
+								"INSERT INTO bl_user_tariffs_history (user_id, tariff_id, actuality) "+
+								"VALUES ($1, $2, $3)"
+								,[
+								    "int"
+								   ,"int"
+								   ,"varchar"
+								 ]
+							      )
+	    
+	    select_tariff_name_plan = plpy.prepare(
+						    "SELECT  tariff_name AS name "+
+						    "FROM bl_tariffs "+ 
+						    "WHERE id = $1"
+						    ,["int"]
+						  )
+	    with plpy.subtransaction():
+		    tariff = plpy.execute(
+					    select_tariff_name_plan
+					   ,[
+					      new_user["tariff_type_ref"]
+					    ]
+					 );
+		    plpy.execute         (
+					    insert_to_radcheck_plan
+					   ,[
+					      new_user["login"]
+					     ,"Cleartext-Password"
+					     ,":="
+					     ,new_user["password"]
+					    ]
+					 )
+		    plpy.execute         (
+					    insert_to_radusergroup_plan
+					   ,[
+					      new_user["login"]
+					     ,tariff[0]["name"]
+					     ,1
+					    ]
+					  )
+		    plpy.execute          (
+					    insert_to_user_tariffs_history_plan
+					   ,[
+					      new_user["id"]
+					     ,new_user["tariff_type_ref"]
+					     ,'actual'
+                                            ]
+					  )
+
+	except plpy.SPIError, e:
+		    print e.args
+
+
+
+
+
+$_$;
+
+
+ALTER FUNCTION public.create_raduser_after_user() OWNER TO radius;
+
+--
+-- TOC entry 229 (class 1255 OID 74451)
+-- Name: create_tariff(integer, integer, integer, text); Type: FUNCTION; Schema: public; Owner: radius
+--
+
+CREATE FUNCTION create_tariff(traffic_limit integer, shaper_limit_up integer, shaper_limit_down integer, tariff_name text) RETURNS boolean
+    LANGUAGE plpython2u
+    AS $_$       insert_to_tariff_plan = plpy.prepare(
+					            "INSERT INTO bl_tariffs (tariff_name, tariffs_group,session_time_limit, traffic_limit_common, shaper_limit_up, shaper_limit_down) " +
+					            "VALUES ($1, $2, $3, $4, $5, $6)"
+					           ,[
+						      "varchar"
+						      ,"varchar"
+						      ,"int"
+						      ,"int"
+						      ,"int"
+						      ,"int"
+						    ]
+					          );	  	    
+       try:	   
+		plpy.execute(
+			      insert_to_tariff_plan 
+			      ,[
+				  tariff_name				 
+				 ,tariff_name	
+				 ,-1			 
+				 ,traffic_limit
+				 ,shaper_limit_up
+				 ,shaper_limit_down
+			       ]
+			    );
+			    
+		return 1
+       except:
+		return 0$_$;
+
+
+ALTER FUNCTION public.create_tariff(traffic_limit integer, shaper_limit_up integer, shaper_limit_down integer, tariff_name text) OWNER TO radius;
+
+--
+-- TOC entry 231 (class 1255 OID 74453)
+-- Name: create_user(text, text, integer); Type: FUNCTION; Schema: public; Owner: radius
+--
+
+CREATE FUNCTION create_user(user_login text, user_password text, tariff_type integer) RETURNS boolean
+    LANGUAGE plpython2u
+    AS $_$       insert_to_user_plan = plpy.prepare(
+					            "INSERT INTO bl_users (login, password, tariff_type_ref, status)" +
+					            "VALUES ($1, $2, $3, $4)"
+					           ,[
+						      "varchar"
+						      ,"varchar"
+						      ,"int"
+						      ,"int"
+						    ]
+					          );	  	    
+       try:         
+	       plpy.execute(
+			      insert_to_user_plan 
+			      ,[
+				  user_login				 
+				 ,user_password	
+				 ,tariff_type
+				 ,1
+			       ]
+			    );
+
+			    
+	       return 1
+       except:
+		return 0
+
+
+		$_$;
+
+
+ALTER FUNCTION public.create_user(user_login text, user_password text, tariff_type integer) OWNER TO radius;
+
+--
+-- TOC entry 241 (class 1255 OID 99096)
+-- Name: delete_tariff_completely(integer); Type: FUNCTION; Schema: public; Owner: radius
+--
+
+CREATE FUNCTION delete_tariff_completely(tariff_id integer) RETURNS boolean
+    LANGUAGE plpython2u
+    AS $$
+plpy.execute("select gd_delete_tariff_completely()")
+return GD["delete_tariff_completely"](tariff_id)$$;
+
+
+ALTER FUNCTION public.delete_tariff_completely(tariff_id integer) OWNER TO radius;
+
+--
+-- TOC entry 256 (class 1255 OID 99093)
+-- Name: delete_user_with_history(integer); Type: FUNCTION; Schema: public; Owner: radius
+--
+
+CREATE FUNCTION delete_user_with_history(user_id integer) RETURNS boolean
+    LANGUAGE plpython2u
+    AS $$plpy.execute("select gd_delete_user_with_history()")
+return GD["delete_user_with_history"](user_id)$$;
+
+
+ALTER FUNCTION public.delete_user_with_history(user_id integer) OWNER TO radius;
+
+--
+-- TOC entry 227 (class 1255 OID 16711)
+-- Name: disconnect_user(text, text, text, text); Type: FUNCTION; Schema: public; Owner: radius
+--
+
+CREATE FUNCTION disconnect_user(user_name text, nas_ip text, nas_identifier text, nas_secret text) RETURNS text
+    LANGUAGE plpython2u
+    AS $$
+import socket, sys, json
+import pyrad.packet
+from pyrad.client import Client, Timeout
+from pyrad.dictionary import Dictionary
+
+
+client = Client(server=nas_ip, secret=nas_secret, authport=3799, acctport=3799, dict=Dictionary("/usr/share/freeradius/dictionary"))
+
+#client.timeout = 3
+#client.retries = 3
+
+
+request = client.CreateAcctPacket(code = pyrad.packet.DisconnectRequest)
+
+request["User-Name"] = user_name
+request["NAS-Identifier"] = nas_identifier
+request["NAS-IP-Address"] = nas_ip
+try:
+    print "Sending Disconnect request"
+    reply = client.SendPacket(request)
+except pyrad.client.Timeout:
+    print "NAS does not reply"
+    return "NAS does not reply"
+    
+if reply.code==pyrad.packet.DisconnectACK:
+#    print "User disconnect ack"
+    return "Success"
+elif reply.code==pyrad.packet.DisconnectNAK:
+#    print "User disconnect nak"
+     return "Fall"
+else:
+#    print reply.code
+     return "Unknown case"
+
+#return str(json.dumps(vars(reply.keys), sort_keys=True, indent=4))
+
+$$;
+
+
+ALTER FUNCTION public.disconnect_user(user_name text, nas_ip text, nas_identifier text, nas_secret text) OWNER TO radius;
+
+--
+-- TOC entry 245 (class 1255 OID 33337)
+-- Name: gd_apply_all_rules_by_affect(); Type: FUNCTION; Schema: public; Owner: radius
+--
+
+CREATE FUNCTION gd_apply_all_rules_by_affect() RETURNS boolean
+    LANGUAGE plpython2u
+    AS $$def apply_all_rules_by_affect(tariff_id, affect_to, counted_input_traffic, counted_output_traffic, user_id):
+	all_rules_func = GD["get_tariffs_rules_by_affect"](tariff_id, affect_to)
+	access_count = 0
+	if not all_rules_func:
+		return {'input' : counted_input_traffic, 'output' : counted_output_traffic} if (affect_to == 'traffic') else access_count	
+	for func in all_rules_func:
+		if (affect_to == 'traffic'):
+			traffic = GD[func](counted_input_traffic, counted_output_traffic)
+			counted_input_traffic = traffic["input"]
+			counted_output_traffic = traffic["output"]
+		elif (affect_to == 'access'):
+			access_count = GD[func](user_id)
+
+	return {'input' : counted_input_traffic, 'output' : counted_output_traffic} if (affect_to == 'traffic') else access_count	
+GD["apply_all_rules_by_affect"]	= apply_all_rules_by_affect
+return True
+		
+		
+$$;
+
+
+ALTER FUNCTION public.gd_apply_all_rules_by_affect() OWNER TO radius;
+
+--
+-- TOC entry 253 (class 1255 OID 33371)
+-- Name: gd_block_user(); Type: FUNCTION; Schema: public; Owner: radius
+--
+
+CREATE FUNCTION gd_block_user() RETURNS boolean
+    LANGUAGE plpython2u
+    AS $_$def block_user(id):
+    try:
+      block_plan = plpy.prepare(
+				"UPDATE bl_users "+
+				"SET status = 2  "+
+				"WHERE id = $1"
+				,["int"]
+			       )
+      plpy.execute(block_plan, [id])				
+	
+    except:
+      return False
+    return True      
+
+GD["block_user"] = block_user
+return True$_$;
+
+
+ALTER FUNCTION public.gd_block_user() OWNER TO radius;
+
+--
+-- TOC entry 248 (class 1255 OID 41621)
+-- Name: gd_call_function_by_time(); Type: FUNCTION; Schema: public; Owner: radius
+--
+
+CREATE FUNCTION gd_call_function_by_time() RETURNS boolean
+    LANGUAGE plpython2u
+    AS $$def call_function_by_time(function_with_params, after_x_minutes):
+	import os
+	echo = "echo"
+	command = "\'PGPASSWORD=radius /usr/bin/psql -p 5432 -d radius -U radius -c \"select  "+ function_with_params + "\"\'"
+	at = "at"
+	time = "now + "+ str(after_x_minutes) + " min"
+	print(echo+" "+ command+" "+"|"+" "+at+ " " +time)
+	try:
+	    os.system(echo +" "+ command +" "+"|"+" "+at+ " " +time)
+	except:
+	    return False
+        return True
+GD["call_function_by_time"] = call_function_by_time
+
+return 	True$$;
+
+
+ALTER FUNCTION public.gd_call_function_by_time() OWNER TO radius;
+
+--
+-- TOC entry 257 (class 1255 OID 99095)
+-- Name: gd_delete_tariff_completely(); Type: FUNCTION; Schema: public; Owner: radius
+--
+
+CREATE FUNCTION gd_delete_tariff_completely() RETURNS boolean
+    LANGUAGE plpython2u
+    AS $_$def delete_tariff_compeletely(tariff_id):
+  try:
+        select_tariff_name_plan = plpy.prepare (
+					        "SELECT  tariff_name AS name "+
+					        "FROM bl_tariffs "+ 
+					        "WHERE id = $1"
+					        ,["int"]
+					       );
+        delete_tariff_radcheck_plan = plpy.prepare(
+				      "DELETE FROM radgroupcheck "+
+				      "WHERE groupname = $1"
+				      , [
+					   "text"
+					]
+				    );
+	delete_user_tariff_history_plan = plpy.prepare(
+				      "DELETE FROM bl_user_tariffs_history "+
+				      "WHERE tariff_id = $1"
+				      , [
+					   "int"
+					]
+				    );
+	delete_rule_link_plan = plpy.prepare(
+				      "DELETE FROM bl_tariff_rule_link "+
+				      "WHERE tariff_id = $1"
+				      , [
+					   "int"
+					]
+				    );
+
+	delete_tariff_radreply_plan = plpy.prepare(
+				      "DELETE FROM radgroupreply "+
+				      "WHERE groupname = $1"
+				      , [
+					   "text"
+					]
+				    );
+	delete_tariff_plan = plpy.prepare(
+				      "DELETE FROM bl_tariffs "+
+				      "WHERE id = $1"
+				      , [
+					   "int"
+					]
+				    );
+			
+	all_tariff_users = GD["get_tariffs_users"](tariff_id)
+	with plpy.subtransaction():	
+		for user_id in all_tariff_users:
+		   delete_result = GD["delete_user_with_history"](user_id)
+
+		tariff = plpy.execute(
+			      select_tariff_name_plan 
+			      ,[
+				  tariff_id					         			        					
+			       ]
+			    );
+		plpy.execute(
+			      delete_user_tariff_history_plan 
+			      ,[
+				  tariff_id					         			        					
+			       ]
+			    );
+		
+		plpy.execute(
+			      delete_tariff_radcheck_plan 
+			      ,[
+				  tariff[0]["name"]					         			        					
+			       ]
+			    );
+		plpy.execute(
+			      delete_tariff_radreply_plan 
+			      ,[
+				  tariff[0]["name"]					         			        					
+			       ]
+			    );
+		
+		plpy.execute(
+			      delete_rule_link_plan 
+			      ,[
+				  tariff_id					         			        					
+			       ]
+			    );	  
+		plpy.execute(
+			      delete_tariff_plan 
+			      ,[
+				  tariff_id					         			        					
+			       ]
+			    );	  
+
+  except:
+    return False
+  return True
+GD["delete_tariff_completely"]	= delete_tariff_compeletely
+return True$_$;
+
+
+ALTER FUNCTION public.gd_delete_tariff_completely() OWNER TO radius;
+
+--
+-- TOC entry 240 (class 1255 OID 99092)
+-- Name: gd_delete_user_with_history(); Type: FUNCTION; Schema: public; Owner: radius
+--
+
+CREATE FUNCTION gd_delete_user_with_history() RETURNS boolean
+    LANGUAGE plpython2u
+    AS $_$def delete_user_with_history(id):
+	try: 
+		select_user_name_plan = plpy.prepare     (
+							     "SELECT  login AS name "+
+							     "FROM bl_users "+ 
+							     "WHERE id = $1"
+							     ,["int"]
+							   );
+                delete_user_radacct_plan =          plpy.prepare(
+							      "DELETE FROM radacct "+
+							      "WHERE username = $1"
+							      , [
+							           "text"
+							        ]
+							    );
+		delete_user_tariffs_history_plan =  plpy.prepare(
+							      "DELETE FROM bl_user_tariffs_history "+
+							      "WHERE user_id = $1"
+							      , [
+							           "int"
+							        ]
+							      );
+	        delete_user_radgroup_plan =          plpy.prepare(
+							      "DELETE FROM radusergroup "+
+							      "WHERE username = $1"
+							      , [
+							           "text"
+							        ]
+							    );
+		delete_user_radcheck_plan =          plpy.prepare(
+							      "DELETE FROM radcheck "+
+							      "WHERE username = $1"
+							      , [
+							           "text"
+							        ]
+							    );
+		delete_user_plan =          plpy.prepare(
+							      "DELETE FROM bl_users "+
+							      "WHERE id = $1"
+							      , [
+							           "int"
+							        ]
+							    );
+					   							          				           	  
+#--------------------------------delete user
+                with plpy.subtransaction():
+		     				
+					user_name = plpy.execute(
+						      select_user_name_plan 
+						      ,[
+							  id					         			        					
+						       ]
+						    );
+				        plpy.execute(
+						      delete_user_radacct_plan 
+						      ,[
+							  user_name[0]["name"]					         			        					
+						       ]
+						    );
+					plpy.execute(
+						      delete_user_tariffs_history_plan 
+						      ,[
+							  id					         			        					
+						       ]
+						    );
+					plpy.execute(
+						      delete_user_radgroup_plan 
+						      ,[
+							  user_name[0]["name"]						         			        					
+						       ]
+						    );
+					plpy.execute(
+						      delete_user_radcheck_plan 
+						      ,[
+							  user_name[0]["name"]						         			        					
+						       ]
+						    );
+					plpy.execute(
+						      delete_user_plan 
+						      ,[
+							  id						         			        					
+						       ]
+						    );
+						    
+	except: 
+	    return False
+        return True   
+GD["delete_user_with_history"] = delete_user_with_history
+return True	$_$;
+
+
+ALTER FUNCTION public.gd_delete_user_with_history() OWNER TO radius;
+
+--
+-- TOC entry 250 (class 1255 OID 41622)
+-- Name: gd_disactive_user(); Type: FUNCTION; Schema: public; Owner: radius
+--
+
+CREATE FUNCTION gd_disactive_user() RETURNS boolean
+    LANGUAGE plpython2u
+    AS $_$def disactive_user(id_user):
+    try:
+      disactive_plan = plpy.prepare(
+				   "UPDATE bl_users "+
+				   "SET status = 0  "+
+				   "WHERE id = $1"
+				   ,["int"]
+				 )
+      plpy.execute(disactive_plan, [id_user])				
+	
+    except:
+      return False
+    return True      
+
+
+GD["disactive_user"] = disactive_user
+return True
+
+
+
+
+$_$;
+
+
+ALTER FUNCTION public.gd_disactive_user() OWNER TO radius;
+
+--
+-- TOC entry 251 (class 1255 OID 33305)
+-- Name: gd_get_tariffs_data(); Type: FUNCTION; Schema: public; Owner: radius
+--
+
+CREATE FUNCTION gd_get_tariffs_data() RETURNS boolean
+    LANGUAGE plpython2u
+    AS $_$def get_tariffs_data(tariff_id):
+	select_tariffs_data_plan = plpy.prepare(
+							     " SELECT     id 			    "+
+							     "		 ,created_date 		    "+
+							     "		 ,created_by 	            "+
+							     "		 ,updated_date 		    "+
+							     "		 ,updated_by 	            "+
+							     "		 ,traffic_limit_common      "+
+							     "		 ,session_time_limit        "+
+							     "		 ,tariffs_group             "+
+							     "		 ,tariff_name               "+
+							     "		 ,traffic_limit_up          "+
+							     "		 ,traffic_limit_down	    "+
+							     "		 ,shaper_limit_up           "+
+							     "		 ,shaper_limit_down         "+
+							     
+							     " FROM        bl_tariffs "	+				 
+							     " WHERE  id = $1 " 
+							     ,["int"]	
+																			     
+					       ) 
+	select_all_tariffs_data_plan = plpy.prepare(
+							     " SELECT     id 			    "+
+							     "		 ,created_date 		    "+
+							     "		 ,created_by 	            "+
+							     "		 ,updated_date 		    "+
+							     "		 ,updated_by 	            "+
+							     "		 ,traffic_limit_common      "+
+							     "		 ,session_time_limit        "+
+							     "		 ,tariffs_group             "+
+							     "		 ,tariff_name               "+
+							     "		 ,traffic_limit_up          "+
+							     "		 ,traffic_limit_down	    "+
+							     "		 ,shaper_limit_up           "+
+							     "		 ,shaper_limit_down         "+
+							     
+							     " FROM        bl_tariffs "	
+																			     
+						   ) 
+					       
+	list_final = []
+
+	curs = (plpy.cursor(select_tariffs_data_plan,[tariff_id]) if tariff_id != 0
+								 else  plpy.cursor(select_all_tariffs_data_plan))
+
+	while True:
+		rows = curs.fetch(1000)
+		if not rows:
+			break
+		for row in rows:
+			list_final.append(
+						{      
+							'id' 		        : row["id"]
+							,'created_date'         : row["created_date"]						
+							,'created_by' 	        : row["created_by"]						
+							,'updated_date'         : row["updated_date"]						
+							,'updated_by'           : row["updated_by"]						
+							,'traffic_limit_common' : row["traffic_limit_common"]						
+							,'session_time_limit' 	: row["session_time_limit"]						
+							,'tariffs_group' 	: row["tariffs_group"]						
+							,'tariff_name' 		: row["tariff_name"]						
+							,'traffic_limit_up' 	: row["traffic_limit_up"]						
+							,'traffic_limit_down' 	: row["traffic_limit_down"]						
+							,'shaper_limit_up' 	: row["shaper_limit_up"]						
+							,'shaper_limit_down' 	: row["shaper_limit_down"]												
+						}
+					)	
+			 
+	return list_final
+GD["get_tariffs_data"] = get_tariffs_data
+return True	$_$;
+
+
+ALTER FUNCTION public.gd_get_tariffs_data() OWNER TO radius;
+
+--
+-- TOC entry 244 (class 1255 OID 33335)
+-- Name: gd_get_tariffs_rules_by_affect(); Type: FUNCTION; Schema: public; Owner: radius
+--
+
+CREATE FUNCTION gd_get_tariffs_rules_by_affect() RETURNS boolean
+    LANGUAGE plpython2u
+    AS $_$def get_tariffs_rules_by_affect(tariff_id, affect_to):
+	
+	get_rules = plpy.prepare(
+							  "SELECT b.rule_function "+
+						          "FROM bl_tariff_rule_link a "+
+							  "INNER JOIN bl_tariffs_rules b "+
+							  "	ON (a.rule_id = b.id and b.affect_to = $2) "+ 
+							  "WHERE a.tariff_id = $1"
+							  ,[
+							      "int"
+							     ,"text"
+							   ]
+						    );
+	list_final = []
+	curs = plpy.cursor(get_rules,[tariff_id, affect_to]) 
+	while True:
+		rowss = curs.fetch(1)
+		if not rowss:
+			break
+		for roww in rowss:
+			list_final.append(roww["rule_function"])				 
+	return list_final
+
+GD["get_tariffs_rules_by_affect"] = get_tariffs_rules_by_affect
+return True
+	$_$;
+
+
+ALTER FUNCTION public.gd_get_tariffs_rules_by_affect() OWNER TO radius;
+
+--
+-- TOC entry 242 (class 1255 OID 99094)
+-- Name: gd_get_tariffs_users(); Type: FUNCTION; Schema: public; Owner: radius
+--
+
+CREATE FUNCTION gd_get_tariffs_users() RETURNS boolean
+    LANGUAGE plpython2u
+    AS $_$def get_tariffs_users(tariff_id):
+	
+	get_users = plpy.prepare(
+				  "SELECT id as user_id "+
+				  "FROM bl_users "+
+				  "WHERE tariff_type_ref = $1"
+				  ,[
+				      "int"
+				   ]
+			       );
+	list_final = []
+	curs = plpy.cursor(get_users,[tariff_id]) 
+	while True:
+		rowss = curs.fetch(1)
+		if not rowss:
+			break
+		for roww in rowss:
+			list_final.append(roww["user_id"])				 
+	return list_final
+
+GD["get_tariffs_users"] = get_tariffs_users
+return True$_$;
+
+
+ALTER FUNCTION public.gd_get_tariffs_users() OWNER TO radius;
+
+--
+-- TOC entry 239 (class 1255 OID 33374)
+-- Name: gd_rule_daily_limit_100_mbyte_traffic(); Type: FUNCTION; Schema: public; Owner: radius
+--
+
+CREATE FUNCTION gd_rule_daily_limit_100_mbyte_traffic() RETURNS boolean
+    LANGUAGE plpython2u
+    AS $_$def rule_daily_limit_100_mbyte_traffic(user_id):
+	import datetime, time
+	today = datetime.date.today()
+	tomorrow = today + datetime.timedelta(days=1)
+
+	user_name_plan = plpy.prepare(
+					 "SELECT login "+
+					 "FROM bl_users "+
+					 "WHERE id = $1"
+					 ,["int"]
+				     )
+	count_limit_plan = plpy.prepare(
+					 "SELECT SUM(acctinputoctets + acctoutputoctets) as sum_to_day "+
+					 "FROM radacct	         "+
+					 "WHERE username = $1 and (acctstarttime >= $2::timestamp and acctstarttime < $3::timestamp)"
+					 ,[
+					    "text"
+					   ,"timestamp"
+					   ,"timestamp"
+					  ]
+				       )
+        with plpy.subtransaction():
+		user_name = plpy.execute(user_name_plan,[user_id])
+		counted_used_today_limit_traffic = plpy.execute(count_limit_plan,[user_name[0]["login"], today, tomorrow])
+	counted_limit = int(counted_used_today_limit_traffic[0]["sum_to_day"]) if counted_used_today_limit_traffic[0]["sum_to_day"] is not None else 0
+	if (counted_limit/(1024*1024)) >= 100:
+		time_diff = (tomorrow - today).total_seconds()
+		GD["block_user"](user_id)
+		time_diff = (tomorrow - today).total_seconds()
+		time = int(time_diff/60)
+		function = "unblock_user(" + str(user_id) + ")"
+		GD["call_function_by_time"](function, time)        		
+	return int(counted_used_today_limit_traffic[0]["sum_to_day"])	
+
+GD["rule_daily_limit_100_mbyte_traffic"] = rule_daily_limit_100_mbyte_traffic        							
+return True $_$;
+
+
+ALTER FUNCTION public.gd_rule_daily_limit_100_mbyte_traffic() OWNER TO radius;
+
+--
+-- TOC entry 254 (class 1255 OID 33323)
+-- Name: gd_rule_free_traffic_from_0_to_6_hour(); Type: FUNCTION; Schema: public; Owner: radius
+--
+
+CREATE FUNCTION gd_rule_free_traffic_from_0_to_6_hour() RETURNS boolean
+    LANGUAGE plpython2u
+    AS $$def rule_free_traffic_from_0_to_6_hour(counted_input_traffic , counted_output_traffic):
+	import datetime
+	now = datetime.datetime.now()
+        if now.hour >= 0 and now.hour <= 6 :
+		if (now.hour == 0 and now.minute == 0):
+			SD["saved_traffic_input"]  = counted_input_traffic
+			SD["saved_traffic_output"] = counted_output_traffic
+		if (SD["saved_traffic_input"] is None and SD["saved_traffic_output"] is None):
+			SD["saved_traffic_input"]  = counted_input_traffic
+			SD["saved_traffic_output"] = counted_output_traffic
+
+		counted_input_traffic  = SD["saved_traffic_input"]	
+		counted_output_traffic = SD["saved_traffic_output"]	
+
+        return {'input' : counted_input_traffic, 'output' : counted_output_traffic}	
+
+GD["rule_free_traffic_from_0_to_6_hour"] = rule_free_traffic_from_0_to_6_hour        							
+return True 
+$$;
+
+
+ALTER FUNCTION public.gd_rule_free_traffic_from_0_to_6_hour() OWNER TO radius;
+
+--
+-- TOC entry 255 (class 1255 OID 41638)
+-- Name: grant_rule_to_tariff(integer, integer); Type: FUNCTION; Schema: public; Owner: radius
+--
+
+CREATE FUNCTION grant_rule_to_tariff(rule_id integer, tariff_id integer) RETURNS boolean
+    LANGUAGE plpython2u
+    AS $_$	grant_rule_to_tariff_plan = plpy.prepare(
+					          "INSERT INTO bl_tariff_rule_link(tariff_id, rule_id) "+
+						  "VALUES ($1, $2)"
+					          ,[
+						     "int"
+						    ,"int"
+						   ]
+					        );	  	    
+	try:	   
+		plpy.execute(
+			      grant_rule_to_tariff_plan 
+			      ,[
+				  tariff_id				 
+				 ,rule_id
+			       ]
+			    );
+			    
+		return True
+	except:
+		return False$_$;
+
+
+ALTER FUNCTION public.grant_rule_to_tariff(rule_id integer, tariff_id integer) OWNER TO radius;
+
+--
+-- TOC entry 246 (class 1255 OID 16896)
+-- Name: grant_tariff_to_user(integer, integer); Type: FUNCTION; Schema: public; Owner: radius
+--
+
+CREATE FUNCTION grant_tariff_to_user(user_id integer, tariff_id integer) RETURNS boolean
+    LANGUAGE plpython2u
+    AS $_$	grant_tariff_to_user_plan = plpy.prepare(
+					          "UPDATE bl_users          "+
+						  "SET tariff_type_ref = $1 "+
+						  "   ,status = 1           "+
+						  "WHERE id = $2"
+					          ,[
+						     "int"
+						    ,"int"
+						   ]
+					        );	  	    
+	try:	   
+		plpy.execute(
+			      grant_tariff_to_user_plan 
+			      ,[
+				  tariff_id				 
+				 ,user_id
+			       ]
+			    );
+			    
+		return 1
+	except:
+		return 0$_$;
+
+
+ALTER FUNCTION public.grant_tariff_to_user(user_id integer, tariff_id integer) OWNER TO radius;
+
+--
+-- TOC entry 226 (class 1255 OID 16684)
+-- Name: radius_authentification(); Type: FUNCTION; Schema: public; Owner: radius
+--
+
+CREATE FUNCTION radius_authentification() RETURNS text
+    LANGUAGE plpython2u
+    AS $$import pyrad.packet
+from pyrad.client import Client
+from pyrad.dictionary import Dictionary
+
+srv=Client(server="localhost", secret="testing123",
+      dict=Dictionary("/usr/share/freeradius/dictionary"))
+
+req=srv.CreateAuthPacket(code=pyrad.packet.AccessRequest,
+              User_Name="test", NAS_Identifier="TP-LINK")
+req["User-Password"]=req.PwCrypt("test")
+
+reply=srv.SendPacket(req)
+if reply.code==pyrad.packet.AccessAccept:
+    print "access accepted"
+    return "access accepted"
+else:
+    print "access denied"
+    return "access denied"
+
+print "Attributes returned by server:"
+for i in reply.keys():
+    print "%s: %s" % (i, reply[i])$$;
+
+
+ALTER FUNCTION public.radius_authentification() OWNER TO radius;
+
+--
+-- TOC entry 230 (class 1255 OID 16753)
+-- Name: set_timestamp_final(); Type: FUNCTION; Schema: public; Owner: radius
+--
+
+CREATE FUNCTION set_timestamp_final() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$BEGIN
+ IF (TG_OP = 'INSERT') THEN
+     NEW.created_date := now();
+     RETURN NEW;
+ ELSIF (TG_OP = 'UPDATE') THEN
+     NEW.updated_date := now();
+     RETURN NEW;
+ END IF;
+
+ RETURN NULL;
+END;$$;
+
+
+ALTER FUNCTION public.set_timestamp_final() OWNER TO radius;
+
+--
+-- TOC entry 247 (class 1255 OID 33336)
+-- Name: test_pl(); Type: FUNCTION; Schema: public; Owner: radius
+--
+
+CREATE FUNCTION test_pl() RETURNS text
+    LANGUAGE plpython2u
+    AS $_$import datetime,time
+today = datetime.date.today()
+tomorrow = today + datetime.timedelta(days=1)
+#tomorrow = tomorrow.strftime('%Y-%m-%d %H:%M:%S')
+#now = datetime.datetime.now()
+#test = now+"----"+ test1["timesql"]
+
+#testnow = time.mktime(now)
+user_id = 915
+#testdate = d.strptime(test2, '%Y-%m-%d %H:%M:%S')
+#now = now.strftime('%Y-%m-%d %H:%M:%S')
+#now = d.strptime(now, '%Y-%m-%d %H:%M:%S')
+#testdif = (testdate - now).total_seconds()
+#test = GD["unblock_user"](913)
+#yesterday = today - datetime.timedelta(days=1)
+#four_day_back = today - datetime.timedelta(days=4)
+#tomorrow = today + datetime.timedelta(days=1)
+#plan = plpy.prepare("select radacctid from radacct where acctstarttime >= $1::timestamp and acctstarttime < $2 ",["timestamp","timestamp"])
+#res = plpy.execute(plan, [today, tomorrow])
+#listt = []
+#for x in res:
+#	listt.append(x["radacctid"])
+#return testnow
+#return GD["add_task_to_sheduler"]('2016-09-23 16:35:00', 'unblock_user', '(915)')
+time_diff = (tomorrow - today).total_seconds()
+time = int(time_diff/60)
+function = "unblock_user(" + str(user_id) + ")"
+return GD["disactive_user"](914)
+$_$;
+
+
+ALTER FUNCTION public.test_pl() OWNER TO radius;
+
+--
+-- TOC entry 235 (class 1255 OID 16885)
+-- Name: tr_change_user_status(); Type: FUNCTION; Schema: public; Owner: radius
+--
+
+CREATE FUNCTION tr_change_user_status() RETURNS trigger
+    LANGUAGE plpython2u
+    AS $_$	plpy.execute("select _meta_init_all_functions()")
+	tariff_history = TD["new"]
+	try: 
+		#plpy.execute("UPDATE bl_users SET status = 0 WHERE id = " + str(tariff_history["user_id"]));
+				    
+	    #Create nas level access
+		    '''
+		    disactiv_user_status_plan = plpy.prepare(
+							      "UPDATE bl_users "+
+							      "SET status = 0  "+
+							      "WHERE id = $1"
+							      , ["int"]
+							    );	 
+                    '''							     	    
+		   
+		    if (tariff_history["actuality"] == 'noactual'):
+
+				#GD["disactive_user"](915)
+				GD["disactive_user"](tariff_history["user_id"])
+
+				'''	
+				plpy.execute(
+					      disactiv_user_status_plan 
+					      ,[
+					         tariff_history["user_id"]
+						 # 909
+					       ]
+					    );	
+				'''						
+		    '''
+		    else:
+				plpy.execute(
+					      disactiv_user_status_plan 
+					      ,[
+						 tariff_history["user_id"]
+						 # 909
+					       ]
+					    );										
+				    
+		    '''
+				    
+	except plpy.SPIError, e:
+		    print e.args
+
+
+
+
+
+$_$;
+
+
+ALTER FUNCTION public.tr_change_user_status() OWNER TO radius;
+
+--
+-- TOC entry 234 (class 1255 OID 16821)
+-- Name: tr_control_usage_tariff(); Type: FUNCTION; Schema: public; Owner: radius
+--
+
+CREATE FUNCTION tr_control_usage_tariff() RETURNS trigger
+    LANGUAGE plpython2u
+    AS $_$	billing_sum_data = TD["new"]
+	try: 
+	    select_tariffs_data_plan = plpy.prepare(
+						     "SELECT traffic_limit_common "+
+					             "      ,session_time_limit   "+
+						     "      ,traffic_limit_up     "+
+						     "	    ,traffic_limit_down   "+
+						     "FROM bl_tariffs "+
+						     "WHERE (id = $1::int)"
+						     , ["int"]
+						   ) 
+	    change_actuality_plan =    plpy.prepare(
+						     "UPDATE bl_user_tariffs_history "+
+						     "SET actuality = noactual       "+
+						     "WHERE id = $1" 
+						     , ["int"]
+						   ) 
+	    #select_summary_billing_data_plan = plpy.prepare("SELECT SUM(acctsessiontime)::bigint AS summary_session_time, SUM(acctinputoctets)::bigint AS summary_input_octets , SUM(acctoutputoctets)::bigint AS summary_output_octets FROM radacct WHERE (username = $1) AND (acctstarttime >= $2::timestamp)", ["varchar","timestamp"]) 
+	  
+	
+	    tariff_data =             plpy.execute(
+						     select_tariffs_data_plan
+						    ,[
+						       billing_sum_data["tariff_id"]
+						     ]
+						    ,1
+						  );
+	    if (
+		   (tariff_data[0]["traffic_limit_common"] != 0) 
+				and 
+		   (
+		       (billing_sum_data["summary_downloaded_octets"] + billing_sum_data["summary_uploaded_octets"])
+							>= 
+					tariff_data[0]["traffic_limit_common"]
+		   )
+	       ):
+		try: 
+		    plpy.execute(
+				   change_actuality_plan
+				  ,[
+				     billing_sum_data["id"]
+				   ]
+				)
+		except plpy.SPIError, e:
+		    return e.args
+	    if (
+		   (tariff_data[0]["session_time_limit"] != 0) 
+				    and 
+		   (billing_sum_data["summary_session_time"]  >= tariff_data[0]["session_time_limit"])
+		
+	       ):
+		try:
+		    plpy.execute (
+				    change_actuality_plan
+				   ,[
+				      billing_sum_data["id"]
+				    ]
+				 )			    
+		except plpy.SPIError, e:
+		    return e.args
+	except plpy.SPIError, e:
+		    return e.args
+$_$;
+
+
+ALTER FUNCTION public.tr_control_usage_tariff() OWNER TO radius;
+
+--
+-- TOC entry 238 (class 1255 OID 16888)
+-- Name: tr_disactive_raduser(); Type: FUNCTION; Schema: public; Owner: radius
+--
+
+CREATE FUNCTION tr_disactive_raduser() RETURNS trigger
+    LANGUAGE plpython2u
+    AS $_$
+	new_row = TD["new"]
+	old_row = TD["old"]
+	
+	try: 
+				    
+	    #Create nas level access
+		
+	        delete_raduser_plan =          plpy.prepare(
+							      "DELETE FROM radcheck "+
+							      "WHERE username = $1 AND attribute = 'Cleartext-Password'"
+							      , [
+							           "text"
+							        ]
+							    );
+	        delete_radusergroup_link_plan = plpy.prepare(
+							      "DELETE FROM radusergroup "+
+							      "WHERE username = $1"
+							      , [
+							           "text"
+							        ]
+							    );	  
+		insert_to_radcheck_plan = plpy.prepare      (
+							      "INSERT INTO radcheck (username, attribute, op, value) " +
+							      "VALUES ($1, $2, $3, $4)"
+							      ,[
+							           "varchar"
+							          ,"varchar"
+							          ,"varchar"
+							          ,"varchar"
+							       ]
+							    )
+	        insert_to_radusergroup_plan = plpy.prepare  (
+							      "INSERT INTO radusergroup (username, groupname, priority) "+
+							      "VALUES ($1, $2, $3)"
+							      ,[
+							          "varchar"
+							         ,"varchar"
+							         ,"int"
+							       ]
+						           )
+		insert_to_user_tariffs_history_plan = plpy.prepare(
+								    "INSERT INTO bl_user_tariffs_history (user_id, tariff_id, actuality) "+
+								    "VALUES ($1, $2, $3)"
+								    ,[
+								        "int"
+								       ,"int"
+								       ,"varchar"
+								     ]
+							          )
+                select_tariff_name_plan = plpy.prepare     (
+							     "SELECT  tariff_name AS name "+
+							     "FROM bl_tariffs "+ 
+							     "WHERE id = $1"
+							     ,["int"]
+							   )
+					   							          				           	  
+#--------------------------------disactive user
+                if ((new_row["status"] == 0) and (old_row["status"] == 1)):							    	    
+		   
+			with plpy.subtransaction():
+						
+					plpy.execute(
+						      delete_raduser_plan 
+						      ,[
+							  old_row["login"]					         			        					
+						       ]
+						    );
+					plpy.execute(
+						      delete_radusergroup_link_plan 
+						      ,[
+							  old_row["login"]					         			        					
+						       ]
+						    );	
+#------------------------------recover user
+                if ((new_row["status"] == 1) and (old_row["status"] == 0)):
+                
+			with plpy.subtransaction():
+			
+			    tariff =  plpy.execute(
+						     select_tariff_name_plan
+						     ,[
+						         new_row["tariff_type_ref"]
+						      ]
+						  )
+			    plpy.execute(
+					    insert_to_radcheck_plan
+					   ,[
+					      new_row["login"]
+					     ,"Cleartext-Password"
+					     ,":="
+					     ,new_row["password"]
+					    ]
+					  )
+			    plpy.execute (
+					    insert_to_radusergroup_plan
+					   ,[
+					      new_row["login"]
+					     ,tariff[0]["name"]
+					     ,1
+					    ]
+					  )
+			    plpy.execute  (
+					    insert_to_user_tariffs_history_plan
+					   ,[
+					      new_row["id"]
+					     ,new_row["tariff_type_ref"]
+					     ,'actual'
+					    ]
+					  )
+#-----------------------------Block user
+                if ((new_row["status"] == 2) and (old_row["status"] == 1)):							    	    
+		   
+			with plpy.subtransaction():
+						
+					plpy.execute(
+						      delete_raduser_plan 
+						      ,[
+							  old_row["login"]					         			        					
+						       ]
+						    );
+#-----------------------------Unblock user
+		if ((new_row["status"] == 1) and (old_row["status"] == 2)):							    	    
+		   
+			with plpy.subtransaction():
+						
+			      plpy.execute(
+					    insert_to_radcheck_plan
+					   ,[
+					      new_row["login"]
+					     ,"Cleartext-Password"
+					     ,":="
+					     ,new_row["password"]
+					    ]
+					  )
+							
+
+	except plpy.SPIError, e:
+		    print e.args
+
+
+
+
+$_$;
+
+
+ALTER FUNCTION public.tr_disactive_raduser() OWNER TO radius;
+
+--
+-- TOC entry 243 (class 1255 OID 16887)
+-- Name: tr_disconnect_raduser(); Type: FUNCTION; Schema: public; Owner: radius
+--
+
+CREATE FUNCTION tr_disconnect_raduser() RETURNS trigger
+    LANGUAGE plpython2u
+    AS $_$
+	deleted_raduser = TD["old"]
+	try: 
+				    
+	    #Create nas level access
+		
+		    disactiv_raduser_plan = plpy.prepare(
+							      "SELECT disconnect_user($1, $2, $3, $4) "
+							      , [
+							           "text"
+							          ,"text"
+							          ,"text"
+							          ,"text"
+							        ]
+							    );	  	    
+		   
+		    if (deleted_raduser["attribute"] == 'Cleartext-Password'):
+					
+				plpy.execute(
+					      disactiv_raduser_plan 
+					      ,[
+					          deleted_raduser["username"]
+					         ,'192.168.1.1'
+					         ,'TP-LINK'
+					         ,'testing123'					        					
+					       ]
+					    );	
+				    
+	except plpy.SPIError, e:
+		    print e.args
+
+
+
+
+
+$_$;
+
+
+ALTER FUNCTION public.tr_disconnect_raduser() OWNER TO radius;
+
+--
+-- TOC entry 249 (class 1255 OID 41619)
+-- Name: unblock_user(integer); Type: FUNCTION; Schema: public; Owner: radius
+--
+
+CREATE FUNCTION unblock_user(user_id integer) RETURNS boolean
+    LANGUAGE plpython2u
+    AS $_$def unblock_user(id_user):
+    try:
+      unblock_plan = plpy.prepare(
+				   "UPDATE bl_users "+
+				   "SET status = 1  "+
+				   "WHERE id = $1"
+				   ,["int"]
+				 )
+      plpy.execute(unblock_plan, [id_user])				
+	
+    except:
+      return False
+    return True      
+
+return unblock_user(user_id)
+$_$;
+
+
+ALTER FUNCTION public.unblock_user(user_id integer) OWNER TO radius;
+
+SET default_tablespace = '';
+
+SET default_with_oids = false;
+
+--
+-- TOC entry 195 (class 1259 OID 16602)
+-- Name: bl_person_data; Type: TABLE; Schema: public; Owner: radius; Tablespace: 
+--
+
+CREATE TABLE bl_person_data (
+    id integer NOT NULL,
+    created_date time without time zone,
+    created_by integer,
+    updated_date timestamp without time zone,
+    updated_by integer,
+    name character varying(30),
+    surname character varying(40),
+    devices_mac_addresses_ref integer
+);
+
+
+ALTER TABLE public.bl_person_data OWNER TO radius;
+
+--
+-- TOC entry 194 (class 1259 OID 16600)
+-- Name: bl_person_data_id_seq; Type: SEQUENCE; Schema: public; Owner: radius
+--
+
+CREATE SEQUENCE bl_person_data_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+ALTER TABLE public.bl_person_data_id_seq OWNER TO radius;
+
+--
+-- TOC entry 2256 (class 0 OID 0)
+-- Dependencies: 194
+-- Name: bl_person_data_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: radius
+--
+
+ALTER SEQUENCE bl_person_data_id_seq OWNED BY bl_person_data.id;
+
+
+--
+-- TOC entry 204 (class 1259 OID 16919)
+-- Name: bl_tariff_rule_link; Type: TABLE; Schema: public; Owner: radius; Tablespace: 
+--
+
+CREATE TABLE bl_tariff_rule_link (
+    tariff_id integer,
+    rule_id integer,
+    id integer NOT NULL
+);
+
+
+ALTER TABLE public.bl_tariff_rule_link OWNER TO radius;
+
+--
+-- TOC entry 206 (class 1259 OID 33314)
+-- Name: bl_tariff_rule_linlk_id_seq; Type: SEQUENCE; Schema: public; Owner: radius
+--
+
+CREATE SEQUENCE bl_tariff_rule_linlk_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+ALTER TABLE public.bl_tariff_rule_linlk_id_seq OWNER TO radius;
+
+--
+-- TOC entry 2257 (class 0 OID 0)
+-- Dependencies: 206
+-- Name: bl_tariff_rule_linlk_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: radius
+--
+
+ALTER SEQUENCE bl_tariff_rule_linlk_id_seq OWNED BY bl_tariff_rule_link.id;
+
+
+--
+-- TOC entry 193 (class 1259 OID 16596)
+-- Name: bl_tariffs; Type: TABLE; Schema: public; Owner: radius; Tablespace: 
+--
+
+CREATE TABLE bl_tariffs (
+    id integer NOT NULL,
+    created_date timestamp without time zone,
+    created_by integer,
+    updated_date time without time zone,
+    updated_by integer,
+    traffic_limit_common bigint DEFAULT 0,
+    session_time_limit integer DEFAULT 0,
+    tariffs_group character varying(60),
+    tariff_name character varying(60),
+    traffic_limit_up bigint,
+    traffic_limit_down bigint,
+    shaper_limit_up integer,
+    shaper_limit_down integer
+);
+
+
+ALTER TABLE public.bl_tariffs OWNER TO radius;
+
+--
+-- TOC entry 192 (class 1259 OID 16594)
+-- Name: bl_tariffs_id_seq; Type: SEQUENCE; Schema: public; Owner: radius
+--
+
+CREATE SEQUENCE bl_tariffs_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+ALTER TABLE public.bl_tariffs_id_seq OWNER TO radius;
+
+--
+-- TOC entry 2258 (class 0 OID 0)
+-- Dependencies: 192
+-- Name: bl_tariffs_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: radius
+--
+
+ALTER SEQUENCE bl_tariffs_id_seq OWNED BY bl_tariffs.id;
+
+
+--
+-- TOC entry 202 (class 1259 OID 16907)
+-- Name: bl_tariffs_rules; Type: TABLE; Schema: public; Owner: radius; Tablespace: 
+--
+
+CREATE TABLE bl_tariffs_rules (
+    id integer NOT NULL,
+    affect_to text,
+    rule_function text,
+    rule_name text
+);
+
+
+ALTER TABLE public.bl_tariffs_rules OWNER TO radius;
+
+--
+-- TOC entry 203 (class 1259 OID 16910)
+-- Name: bl_tariffs_rules_id_seq; Type: SEQUENCE; Schema: public; Owner: radius
+--
+
+CREATE SEQUENCE bl_tariffs_rules_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+ALTER TABLE public.bl_tariffs_rules_id_seq OWNER TO radius;
+
+--
+-- TOC entry 2259 (class 0 OID 0)
+-- Dependencies: 203
+-- Name: bl_tariffs_rules_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: radius
+--
+
+ALTER SEQUENCE bl_tariffs_rules_id_seq OWNED BY bl_tariffs_rules.id;
+
+
+--
+-- TOC entry 207 (class 1259 OID 33363)
+-- Name: bl_task_sheduler; Type: TABLE; Schema: public; Owner: radius; Tablespace: 
+--
+
+CREATE TABLE bl_task_sheduler (
+    time_execute timestamp without time zone,
+    function text,
+    parameters text,
+    id integer NOT NULL
+);
+
+
+ALTER TABLE public.bl_task_sheduler OWNER TO radius;
+
+--
+-- TOC entry 208 (class 1259 OID 41606)
+-- Name: bl_task_sheduler_id_seq; Type: SEQUENCE; Schema: public; Owner: radius
+--
+
+CREATE SEQUENCE bl_task_sheduler_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+ALTER TABLE public.bl_task_sheduler_id_seq OWNER TO radius;
+
+--
+-- TOC entry 2260 (class 0 OID 0)
+-- Dependencies: 208
+-- Name: bl_task_sheduler_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: radius
+--
+
+ALTER SEQUENCE bl_task_sheduler_id_seq OWNED BY bl_task_sheduler.id;
+
+
+--
+-- TOC entry 200 (class 1259 OID 16720)
+-- Name: bl_user_tariffs_history; Type: TABLE; Schema: public; Owner: radius; Tablespace: 
+--
+
+CREATE TABLE bl_user_tariffs_history (
+    id integer NOT NULL,
+    created_date timestamp without time zone,
+    created_by integer,
+    updated_date timestamp without time zone,
+    updated_by integer,
+    user_id integer,
+    tariff_id integer,
+    summary_session_time integer,
+    summary_downloaded_octets bigint,
+    summary_uploaded_octets bigint,
+    actuality text
+);
+
+
+ALTER TABLE public.bl_user_tariffs_history OWNER TO radius;
+
+--
+-- TOC entry 199 (class 1259 OID 16718)
+-- Name: bl_user_tariffs_history_id_seq; Type: SEQUENCE; Schema: public; Owner: radius
+--
+
+CREATE SEQUENCE bl_user_tariffs_history_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+ALTER TABLE public.bl_user_tariffs_history_id_seq OWNER TO radius;
+
+--
+-- TOC entry 2261 (class 0 OID 0)
+-- Dependencies: 199
+-- Name: bl_user_tariffs_history_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: radius
+--
+
+ALTER SEQUENCE bl_user_tariffs_history_id_seq OWNED BY bl_user_tariffs_history.id;
+
+
+--
+-- TOC entry 191 (class 1259 OID 16590)
+-- Name: bl_users; Type: TABLE; Schema: public; Owner: radius; Tablespace: 
+--
+
+CREATE TABLE bl_users (
+    id integer NOT NULL,
+    created_date timestamp without time zone,
+    created_by integer,
+    updated_date timestamp without time zone,
+    update_by integer,
+    login character varying(20),
+    password character varying(50),
+    tariff_type_ref integer,
+    sessions_used_time bigint,
+    traffic_used_value_bytes bigint,
+    person_data_ref integer,
+    status integer
+);
+
+
+ALTER TABLE public.bl_users OWNER TO radius;
+
+--
+-- TOC entry 197 (class 1259 OID 16608)
+-- Name: bl_users_devices; Type: TABLE; Schema: public; Owner: radius; Tablespace: 
+--
+
+CREATE TABLE bl_users_devices (
+    id integer NOT NULL,
+    users_ref integer,
+    mac_address macaddr
+);
+
+
+ALTER TABLE public.bl_users_devices OWNER TO radius;
+
+--
+-- TOC entry 196 (class 1259 OID 16606)
+-- Name: bl_users_devices_id_seq; Type: SEQUENCE; Schema: public; Owner: radius
+--
+
+CREATE SEQUENCE bl_users_devices_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+ALTER TABLE public.bl_users_devices_id_seq OWNER TO radius;
+
+--
+-- TOC entry 2262 (class 0 OID 0)
+-- Dependencies: 196
+-- Name: bl_users_devices_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: radius
+--
+
+ALTER SEQUENCE bl_users_devices_id_seq OWNED BY bl_users_devices.id;
+
+
+--
+-- TOC entry 190 (class 1259 OID 16588)
+-- Name: bl_users_id_seq; Type: SEQUENCE; Schema: public; Owner: radius
+--
+
+CREATE SEQUENCE bl_users_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+ALTER TABLE public.bl_users_id_seq OWNER TO radius;
+
+--
+-- TOC entry 2263 (class 0 OID 0)
+-- Dependencies: 190
+-- Name: bl_users_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: radius
+--
+
+ALTER SEQUENCE bl_users_id_seq OWNED BY bl_users.id;
+
+
+--
+-- TOC entry 209 (class 1259 OID 90840)
+-- Name: migrations; Type: TABLE; Schema: public; Owner: postgres; Tablespace: 
+--
+
+CREATE TABLE migrations (
+    migration character varying(255) NOT NULL,
+    batch integer NOT NULL
+);
+
+
+ALTER TABLE public.migrations OWNER TO postgres;
+
+--
+-- TOC entry 187 (class 1259 OID 16513)
+-- Name: operators; Type: TABLE; Schema: public; Owner: radius; Tablespace: 
+--
+
+CREATE TABLE operators (
+    id bigint NOT NULL,
+    username character varying(32),
+    password character varying(32)
+);
+
+
+ALTER TABLE public.operators OWNER TO radius;
+
+--
+-- TOC entry 186 (class 1259 OID 16511)
+-- Name: operators_id_seq; Type: SEQUENCE; Schema: public; Owner: radius
+--
+
+CREATE SEQUENCE operators_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+ALTER TABLE public.operators_id_seq OWNER TO radius;
+
+--
+-- TOC entry 2264 (class 0 OID 0)
+-- Dependencies: 186
+-- Name: operators_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: radius
+--
+
+ALTER SEQUENCE operators_id_seq OWNED BY operators.id;
+
+
+--
+-- TOC entry 212 (class 1259 OID 90856)
+-- Name: password_resets; Type: TABLE; Schema: public; Owner: postgres; Tablespace: 
+--
+
+CREATE TABLE password_resets (
+    email character varying(255) NOT NULL,
+    token character varying(255) NOT NULL,
+    created_at timestamp(0) without time zone NOT NULL
+);
+
+
+ALTER TABLE public.password_resets OWNER TO postgres;
+
+--
+-- TOC entry 172 (class 1259 OID 16388)
+-- Name: radacct; Type: TABLE; Schema: public; Owner: radius; Tablespace: 
+--
+
+CREATE TABLE radacct (
+    radacctid bigint NOT NULL,
+    acctsessionid character varying(64) NOT NULL,
+    acctuniqueid character varying(32) NOT NULL,
+    username character varying(253),
+    groupname character varying(253),
+    realm character varying(64),
+    nasipaddress inet NOT NULL,
+    nasportid character varying(15),
+    nasporttype character varying(32),
+    acctstarttime timestamp without time zone,
+    acctstoptime timestamp without time zone,
+    acctsessiontime bigint,
+    acctauthentic character varying(32),
+    connectinfo_start character varying(50),
+    connectinfo_stop character varying(50),
+    acctinputoctets bigint,
+    acctoutputoctets bigint,
+    calledstationid character varying(50),
+    callingstationid character varying(50),
+    acctterminatecause character varying(32),
+    servicetype character varying(32),
+    xascendsessionsvrkey character varying(10),
+    framedprotocol character varying(32),
+    framedipaddress inet,
+    acctstartdelay integer,
+    acctstopdelay integer
+);
+
+
+ALTER TABLE public.radacct OWNER TO radius;
+
+--
+-- TOC entry 171 (class 1259 OID 16386)
+-- Name: radacct_radacctid_seq; Type: SEQUENCE; Schema: public; Owner: radius
+--
+
+CREATE SEQUENCE radacct_radacctid_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+ALTER TABLE public.radacct_radacctid_seq OWNER TO radius;
+
+--
+-- TOC entry 2265 (class 0 OID 0)
+-- Dependencies: 171
+-- Name: radacct_radacctid_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: radius
+--
+
+ALTER SEQUENCE radacct_radacctid_seq OWNED BY radacct.radacctid;
+
+
+--
+-- TOC entry 174 (class 1259 OID 16401)
+-- Name: radcheck; Type: TABLE; Schema: public; Owner: radius; Tablespace: 
+--
+
+CREATE TABLE radcheck (
+    id integer NOT NULL,
+    username character varying(64) DEFAULT ''::character varying NOT NULL,
+    attribute character varying(64) DEFAULT ''::character varying NOT NULL,
+    op character(2) DEFAULT '=='::bpchar NOT NULL,
+    value character varying(253) DEFAULT ''::character varying NOT NULL
+);
+
+
+ALTER TABLE public.radcheck OWNER TO radius;
+
+--
+-- TOC entry 173 (class 1259 OID 16399)
+-- Name: radcheck_id_seq; Type: SEQUENCE; Schema: public; Owner: radius
+--
+
+CREATE SEQUENCE radcheck_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+ALTER TABLE public.radcheck_id_seq OWNER TO radius;
+
+--
+-- TOC entry 2266 (class 0 OID 0)
+-- Dependencies: 173
+-- Name: radcheck_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: radius
+--
+
+ALTER SEQUENCE radcheck_id_seq OWNED BY radcheck.id;
+
+
+--
+-- TOC entry 176 (class 1259 OID 16414)
+-- Name: radgroupcheck; Type: TABLE; Schema: public; Owner: radius; Tablespace: 
+--
+
+CREATE TABLE radgroupcheck (
+    id integer NOT NULL,
+    groupname character varying(64) DEFAULT ''::character varying NOT NULL,
+    attribute character varying(64) DEFAULT ''::character varying NOT NULL,
+    op character(2) DEFAULT '=='::bpchar NOT NULL,
+    value character varying(253) DEFAULT ''::character varying NOT NULL
+);
+
+
+ALTER TABLE public.radgroupcheck OWNER TO radius;
+
+--
+-- TOC entry 175 (class 1259 OID 16412)
+-- Name: radgroupcheck_id_seq; Type: SEQUENCE; Schema: public; Owner: radius
+--
+
+CREATE SEQUENCE radgroupcheck_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+ALTER TABLE public.radgroupcheck_id_seq OWNER TO radius;
+
+--
+-- TOC entry 2267 (class 0 OID 0)
+-- Dependencies: 175
+-- Name: radgroupcheck_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: radius
+--
+
+ALTER SEQUENCE radgroupcheck_id_seq OWNED BY radgroupcheck.id;
+
+
+--
+-- TOC entry 178 (class 1259 OID 16427)
+-- Name: radgroupreply; Type: TABLE; Schema: public; Owner: radius; Tablespace: 
+--
+
+CREATE TABLE radgroupreply (
+    id integer NOT NULL,
+    groupname character varying(64) DEFAULT ''::character varying NOT NULL,
+    attribute character varying(64) DEFAULT ''::character varying NOT NULL,
+    op character(2) DEFAULT '='::bpchar NOT NULL,
+    value character varying(253) DEFAULT ''::character varying NOT NULL
+);
+
+
+ALTER TABLE public.radgroupreply OWNER TO radius;
+
+--
+-- TOC entry 177 (class 1259 OID 16425)
+-- Name: radgroupreply_id_seq; Type: SEQUENCE; Schema: public; Owner: radius
+--
+
+CREATE SEQUENCE radgroupreply_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+ALTER TABLE public.radgroupreply_id_seq OWNER TO radius;
+
+--
+-- TOC entry 2268 (class 0 OID 0)
+-- Dependencies: 177
+-- Name: radgroupreply_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: radius
+--
+
+ALTER SEQUENCE radgroupreply_id_seq OWNED BY radgroupreply.id;
+
+
+--
+-- TOC entry 185 (class 1259 OID 16485)
+-- Name: radippool; Type: TABLE; Schema: public; Owner: radius; Tablespace: 
+--
+
+CREATE TABLE radippool (
+    id bigint NOT NULL,
+    pool_name character varying(64) NOT NULL,
+    framedipaddress inet NOT NULL,
+    nasipaddress character varying(16) DEFAULT ''::character varying NOT NULL,
+    pool_key character varying(64) DEFAULT 0 NOT NULL,
+    calledstationid character varying(64),
+    callingstationid text DEFAULT ''::text NOT NULL,
+    expiry_time timestamp(0) without time zone DEFAULT '2016-06-14 15:21:54.828493'::timestamp(0) without time zone NOT NULL,
+    username text DEFAULT ''::text
+);
+
+
+ALTER TABLE public.radippool OWNER TO radius;
+
+--
+-- TOC entry 184 (class 1259 OID 16483)
+-- Name: radippool_id_seq; Type: SEQUENCE; Schema: public; Owner: radius
+--
+
+CREATE SEQUENCE radippool_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+ALTER TABLE public.radippool_id_seq OWNER TO radius;
+
+--
+-- TOC entry 2269 (class 0 OID 0)
+-- Dependencies: 184
+-- Name: radippool_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: radius
+--
+
+ALTER SEQUENCE radippool_id_seq OWNED BY radippool.id;
+
+
+--
+-- TOC entry 183 (class 1259 OID 16460)
+-- Name: radpostauth; Type: TABLE; Schema: public; Owner: radius; Tablespace: 
+--
+
+CREATE TABLE radpostauth (
+    id bigint NOT NULL,
+    username character varying(253) NOT NULL,
+    pass character varying(128),
+    reply character varying(32),
+    calledstationid character varying(50),
+    callingstationid character varying(50),
+    authdate timestamp with time zone DEFAULT '2016-06-14 13:10:17.040886+05'::timestamp with time zone NOT NULL
+);
+
+
+ALTER TABLE public.radpostauth OWNER TO radius;
+
+--
+-- TOC entry 182 (class 1259 OID 16458)
+-- Name: radpostauth_id_seq; Type: SEQUENCE; Schema: public; Owner: radius
+--
+
+CREATE SEQUENCE radpostauth_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+ALTER TABLE public.radpostauth_id_seq OWNER TO radius;
+
+--
+-- TOC entry 2270 (class 0 OID 0)
+-- Dependencies: 182
+-- Name: radpostauth_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: radius
+--
+
+ALTER SEQUENCE radpostauth_id_seq OWNED BY radpostauth.id;
+
+
+--
+-- TOC entry 180 (class 1259 OID 16440)
+-- Name: radreply; Type: TABLE; Schema: public; Owner: radius; Tablespace: 
+--
+
+CREATE TABLE radreply (
+    id integer NOT NULL,
+    username character varying(64) DEFAULT ''::character varying NOT NULL,
+    attribute character varying(64) DEFAULT ''::character varying NOT NULL,
+    op character(2) DEFAULT '='::bpchar NOT NULL,
+    value character varying(253) DEFAULT ''::character varying NOT NULL
+);
+
+
+ALTER TABLE public.radreply OWNER TO radius;
+
+--
+-- TOC entry 179 (class 1259 OID 16438)
+-- Name: radreply_id_seq; Type: SEQUENCE; Schema: public; Owner: radius
+--
+
+CREATE SEQUENCE radreply_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+ALTER TABLE public.radreply_id_seq OWNER TO radius;
+
+--
+-- TOC entry 2271 (class 0 OID 0)
+-- Dependencies: 179
+-- Name: radreply_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: radius
+--
+
+ALTER SEQUENCE radreply_id_seq OWNED BY radreply.id;
+
+
+--
+-- TOC entry 181 (class 1259 OID 16451)
+-- Name: radusergroup; Type: TABLE; Schema: public; Owner: radius; Tablespace: 
+--
+
+CREATE TABLE radusergroup (
+    username character varying(64) DEFAULT ''::character varying NOT NULL,
+    groupname character varying(64) DEFAULT ''::character varying NOT NULL,
+    priority integer DEFAULT 0 NOT NULL,
+    id integer NOT NULL
+);
+
+
+ALTER TABLE public.radusergroup OWNER TO radius;
+
+--
+-- TOC entry 198 (class 1259 OID 16622)
+-- Name: radusergroup_id_seq; Type: SEQUENCE; Schema: public; Owner: radius
+--
+
+CREATE SEQUENCE radusergroup_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+ALTER TABLE public.radusergroup_id_seq OWNER TO radius;
+
+--
+-- TOC entry 2272 (class 0 OID 0)
+-- Dependencies: 198
+-- Name: radusergroup_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: radius
+--
+
+ALTER SEQUENCE radusergroup_id_seq OWNED BY radusergroup.id;
+
+
+--
+-- TOC entry 189 (class 1259 OID 16568)
+-- Name: totacct; Type: TABLE; Schema: public; Owner: radius; Tablespace: 
+--
+
+CREATE TABLE totacct (
+    totacctid integer NOT NULL,
+    username character varying(64) DEFAULT ''::character varying NOT NULL,
+    acctdate date NOT NULL,
+    connnum bigint,
+    conntotduration bigint,
+    connmaxduration bigint,
+    connminduration bigint,
+    inputoctets bigint,
+    outputoctets bigint,
+    nasipaddress character varying(15) DEFAULT NULL::character varying
+);
+
+
+ALTER TABLE public.totacct OWNER TO radius;
+
+--
+-- TOC entry 188 (class 1259 OID 16566)
+-- Name: totacct_totacctid_seq; Type: SEQUENCE; Schema: public; Owner: radius
+--
+
+CREATE SEQUENCE totacct_totacctid_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+ALTER TABLE public.totacct_totacctid_seq OWNER TO radius;
+
+--
+-- TOC entry 2273 (class 0 OID 0)
+-- Dependencies: 188
+-- Name: totacct_totacctid_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: radius
+--
+
+ALTER SEQUENCE totacct_totacctid_seq OWNED BY totacct.totacctid;
+
+
+--
+-- TOC entry 211 (class 1259 OID 90845)
+-- Name: users; Type: TABLE; Schema: public; Owner: postgres; Tablespace: 
+--
+
+CREATE TABLE users (
+    id integer NOT NULL,
+    name character varying(255) NOT NULL,
+    email character varying(255) NOT NULL,
+    password character varying(60) NOT NULL,
+    remember_token character varying(100),
+    created_at timestamp(0) without time zone NOT NULL,
+    updated_at timestamp(0) without time zone NOT NULL
+);
+
+
+ALTER TABLE public.users OWNER TO postgres;
+
+--
+-- TOC entry 210 (class 1259 OID 90843)
+-- Name: users_id_seq; Type: SEQUENCE; Schema: public; Owner: postgres
+--
+
+CREATE SEQUENCE users_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+ALTER TABLE public.users_id_seq OWNER TO postgres;
+
+--
+-- TOC entry 2274 (class 0 OID 0)
+-- Dependencies: 210
+-- Name: users_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: postgres
+--
+
+ALTER SEQUENCE users_id_seq OWNED BY users.id;
+
+
+--
+-- TOC entry 2068 (class 2604 OID 16605)
+-- Name: id; Type: DEFAULT; Schema: public; Owner: radius
+--
+
+ALTER TABLE ONLY bl_person_data ALTER COLUMN id SET DEFAULT nextval('bl_person_data_id_seq'::regclass);
+
+
+--
+-- TOC entry 2072 (class 2604 OID 33316)
+-- Name: id; Type: DEFAULT; Schema: public; Owner: radius
+--
+
+ALTER TABLE ONLY bl_tariff_rule_link ALTER COLUMN id SET DEFAULT nextval('bl_tariff_rule_linlk_id_seq'::regclass);
+
+
+--
+-- TOC entry 2065 (class 2604 OID 16599)
+-- Name: id; Type: DEFAULT; Schema: public; Owner: radius
+--
+
+ALTER TABLE ONLY bl_tariffs ALTER COLUMN id SET DEFAULT nextval('bl_tariffs_id_seq'::regclass);
+
+
+--
+-- TOC entry 2071 (class 2604 OID 16912)
+-- Name: id; Type: DEFAULT; Schema: public; Owner: radius
+--
+
+ALTER TABLE ONLY bl_tariffs_rules ALTER COLUMN id SET DEFAULT nextval('bl_tariffs_rules_id_seq'::regclass);
+
+
+--
+-- TOC entry 2073 (class 2604 OID 41608)
+-- Name: id; Type: DEFAULT; Schema: public; Owner: radius
+--
+
+ALTER TABLE ONLY bl_task_sheduler ALTER COLUMN id SET DEFAULT nextval('bl_task_sheduler_id_seq'::regclass);
+
+
+--
+-- TOC entry 2070 (class 2604 OID 16723)
+-- Name: id; Type: DEFAULT; Schema: public; Owner: radius
+--
+
+ALTER TABLE ONLY bl_user_tariffs_history ALTER COLUMN id SET DEFAULT nextval('bl_user_tariffs_history_id_seq'::regclass);
+
+
+--
+-- TOC entry 2064 (class 2604 OID 16593)
+-- Name: id; Type: DEFAULT; Schema: public; Owner: radius
+--
+
+ALTER TABLE ONLY bl_users ALTER COLUMN id SET DEFAULT nextval('bl_users_id_seq'::regclass);
+
+
+--
+-- TOC entry 2069 (class 2604 OID 16611)
+-- Name: id; Type: DEFAULT; Schema: public; Owner: radius
+--
+
+ALTER TABLE ONLY bl_users_devices ALTER COLUMN id SET DEFAULT nextval('bl_users_devices_id_seq'::regclass);
+
+
+--
+-- TOC entry 2060 (class 2604 OID 16516)
+-- Name: id; Type: DEFAULT; Schema: public; Owner: radius
+--
+
+ALTER TABLE ONLY operators ALTER COLUMN id SET DEFAULT nextval('operators_id_seq'::regclass);
+
+
+--
+-- TOC entry 2027 (class 2604 OID 16391)
+-- Name: radacctid; Type: DEFAULT; Schema: public; Owner: radius
+--
+
+ALTER TABLE ONLY radacct ALTER COLUMN radacctid SET DEFAULT nextval('radacct_radacctid_seq'::regclass);
+
+
+--
+-- TOC entry 2028 (class 2604 OID 16404)
+-- Name: id; Type: DEFAULT; Schema: public; Owner: radius
+--
+
+ALTER TABLE ONLY radcheck ALTER COLUMN id SET DEFAULT nextval('radcheck_id_seq'::regclass);
+
+
+--
+-- TOC entry 2033 (class 2604 OID 16417)
+-- Name: id; Type: DEFAULT; Schema: public; Owner: radius
+--
+
+ALTER TABLE ONLY radgroupcheck ALTER COLUMN id SET DEFAULT nextval('radgroupcheck_id_seq'::regclass);
+
+
+--
+-- TOC entry 2038 (class 2604 OID 16430)
+-- Name: id; Type: DEFAULT; Schema: public; Owner: radius
+--
+
+ALTER TABLE ONLY radgroupreply ALTER COLUMN id SET DEFAULT nextval('radgroupreply_id_seq'::regclass);
+
+
+--
+-- TOC entry 2054 (class 2604 OID 16488)
+-- Name: id; Type: DEFAULT; Schema: public; Owner: radius
+--
+
+ALTER TABLE ONLY radippool ALTER COLUMN id SET DEFAULT nextval('radippool_id_seq'::regclass);
+
+
+--
+-- TOC entry 2052 (class 2604 OID 16463)
+-- Name: id; Type: DEFAULT; Schema: public; Owner: radius
+--
+
+ALTER TABLE ONLY radpostauth ALTER COLUMN id SET DEFAULT nextval('radpostauth_id_seq'::regclass);
+
+
+--
+-- TOC entry 2043 (class 2604 OID 16443)
+-- Name: id; Type: DEFAULT; Schema: public; Owner: radius
+--
+
+ALTER TABLE ONLY radreply ALTER COLUMN id SET DEFAULT nextval('radreply_id_seq'::regclass);
+
+
+--
+-- TOC entry 2051 (class 2604 OID 16624)
+-- Name: id; Type: DEFAULT; Schema: public; Owner: radius
+--
+
+ALTER TABLE ONLY radusergroup ALTER COLUMN id SET DEFAULT nextval('radusergroup_id_seq'::regclass);
+
+
+--
+-- TOC entry 2061 (class 2604 OID 16571)
+-- Name: totacctid; Type: DEFAULT; Schema: public; Owner: radius
+--
+
+ALTER TABLE ONLY totacct ALTER COLUMN totacctid SET DEFAULT nextval('totacct_totacctid_seq'::regclass);
+
+
+--
+-- TOC entry 2074 (class 2604 OID 90848)
+-- Name: id; Type: DEFAULT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY users ALTER COLUMN id SET DEFAULT nextval('users_id_seq'::regclass);
+
+
+--
+-- TOC entry 2110 (class 2606 OID 16615)
+-- Name: bl_person_data_pkey; Type: CONSTRAINT; Schema: public; Owner: radius; Tablespace: 
+--
+
+ALTER TABLE ONLY bl_person_data
+    ADD CONSTRAINT bl_person_data_pkey PRIMARY KEY (id);
+
+
+--
+-- TOC entry 2118 (class 2606 OID 33321)
+-- Name: bl_tariff_rule_linlk_pkey; Type: CONSTRAINT; Schema: public; Owner: radius; Tablespace: 
+--
+
+ALTER TABLE ONLY bl_tariff_rule_link
+    ADD CONSTRAINT bl_tariff_rule_linlk_pkey PRIMARY KEY (id);
+
+
+--
+-- TOC entry 2108 (class 2606 OID 16617)
+-- Name: bl_tariffs_pkey; Type: CONSTRAINT; Schema: public; Owner: radius; Tablespace: 
+--
+
+ALTER TABLE ONLY bl_tariffs
+    ADD CONSTRAINT bl_tariffs_pkey PRIMARY KEY (id);
+
+
+--
+-- TOC entry 2116 (class 2606 OID 33313)
+-- Name: bl_tariffs_rules_pkey; Type: CONSTRAINT; Schema: public; Owner: radius; Tablespace: 
+--
+
+ALTER TABLE ONLY bl_tariffs_rules
+    ADD CONSTRAINT bl_tariffs_rules_pkey PRIMARY KEY (id);
+
+
+--
+-- TOC entry 2120 (class 2606 OID 41616)
+-- Name: bl_task_sheduler_pkey; Type: CONSTRAINT; Schema: public; Owner: radius; Tablespace: 
+--
+
+ALTER TABLE ONLY bl_task_sheduler
+    ADD CONSTRAINT bl_task_sheduler_pkey PRIMARY KEY (id);
+
+
+--
+-- TOC entry 2114 (class 2606 OID 16735)
+-- Name: bl_user_tariffs_history_pkey; Type: CONSTRAINT; Schema: public; Owner: radius; Tablespace: 
+--
+
+ALTER TABLE ONLY bl_user_tariffs_history
+    ADD CONSTRAINT bl_user_tariffs_history_pkey PRIMARY KEY (id);
+
+
+--
+-- TOC entry 2112 (class 2606 OID 16621)
+-- Name: bl_users_devices_pkey; Type: CONSTRAINT; Schema: public; Owner: radius; Tablespace: 
+--
+
+ALTER TABLE ONLY bl_users_devices
+    ADD CONSTRAINT bl_users_devices_pkey PRIMARY KEY (id);
+
+
+--
+-- TOC entry 2106 (class 2606 OID 16619)
+-- Name: bl_users_pkey; Type: CONSTRAINT; Schema: public; Owner: radius; Tablespace: 
+--
+
+ALTER TABLE ONLY bl_users
+    ADD CONSTRAINT bl_users_pkey PRIMARY KEY (id);
+
+
+--
+-- TOC entry 2102 (class 2606 OID 16518)
+-- Name: operators_pkey; Type: CONSTRAINT; Schema: public; Owner: radius; Tablespace: 
+--
+
+ALTER TABLE ONLY operators
+    ADD CONSTRAINT operators_pkey PRIMARY KEY (id);
+
+
+--
+-- TOC entry 2077 (class 2606 OID 16396)
+-- Name: radacct_pkey; Type: CONSTRAINT; Schema: public; Owner: radius; Tablespace: 
+--
+
+ALTER TABLE ONLY radacct
+    ADD CONSTRAINT radacct_pkey PRIMARY KEY (radacctid);
+
+
+--
+-- TOC entry 2080 (class 2606 OID 16410)
+-- Name: radcheck_pkey; Type: CONSTRAINT; Schema: public; Owner: radius; Tablespace: 
+--
+
+ALTER TABLE ONLY radcheck
+    ADD CONSTRAINT radcheck_pkey PRIMARY KEY (id);
+
+
+--
+-- TOC entry 2084 (class 2606 OID 16423)
+-- Name: radgroupcheck_pkey; Type: CONSTRAINT; Schema: public; Owner: radius; Tablespace: 
+--
+
+ALTER TABLE ONLY radgroupcheck
+    ADD CONSTRAINT radgroupcheck_pkey PRIMARY KEY (id);
+
+
+--
+-- TOC entry 2087 (class 2606 OID 16436)
+-- Name: radgroupreply_pkey; Type: CONSTRAINT; Schema: public; Owner: radius; Tablespace: 
+--
+
+ALTER TABLE ONLY radgroupreply
+    ADD CONSTRAINT radgroupreply_pkey PRIMARY KEY (id);
+
+
+--
+-- TOC entry 2099 (class 2606 OID 16498)
+-- Name: radippool_pkey; Type: CONSTRAINT; Schema: public; Owner: radius; Tablespace: 
+--
+
+ALTER TABLE ONLY radippool
+    ADD CONSTRAINT radippool_pkey PRIMARY KEY (id);
+
+
+--
+-- TOC entry 2095 (class 2606 OID 16469)
+-- Name: radpostauth_pkey; Type: CONSTRAINT; Schema: public; Owner: radius; Tablespace: 
+--
+
+ALTER TABLE ONLY radpostauth
+    ADD CONSTRAINT radpostauth_pkey PRIMARY KEY (id);
+
+
+--
+-- TOC entry 2089 (class 2606 OID 16449)
+-- Name: radreply_pkey; Type: CONSTRAINT; Schema: public; Owner: radius; Tablespace: 
+--
+
+ALTER TABLE ONLY radreply
+    ADD CONSTRAINT radreply_pkey PRIMARY KEY (id);
+
+
+--
+-- TOC entry 2092 (class 2606 OID 16630)
+-- Name: radusergroup_pkey; Type: CONSTRAINT; Schema: public; Owner: radius; Tablespace: 
+--
+
+ALTER TABLE ONLY radusergroup
+    ADD CONSTRAINT radusergroup_pkey PRIMARY KEY (id);
+
+
+--
+-- TOC entry 2104 (class 2606 OID 16575)
+-- Name: totacct_pkey; Type: CONSTRAINT; Schema: public; Owner: radius; Tablespace: 
+--
+
+ALTER TABLE ONLY totacct
+    ADD CONSTRAINT totacct_pkey PRIMARY KEY (totacctid);
+
+
+--
+-- TOC entry 2122 (class 2606 OID 90855)
+-- Name: users_email_unique; Type: CONSTRAINT; Schema: public; Owner: postgres; Tablespace: 
+--
+
+ALTER TABLE ONLY users
+    ADD CONSTRAINT users_email_unique UNIQUE (email);
+
+
+--
+-- TOC entry 2124 (class 2606 OID 90853)
+-- Name: users_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres; Tablespace: 
+--
+
+ALTER TABLE ONLY users
+    ADD CONSTRAINT users_pkey PRIMARY KEY (id);
+
+
+--
+-- TOC entry 2125 (class 1259 OID 90862)
+-- Name: password_resets_email_index; Type: INDEX; Schema: public; Owner: postgres; Tablespace: 
+--
+
+CREATE INDEX password_resets_email_index ON password_resets USING btree (email);
+
+
+--
+-- TOC entry 2126 (class 1259 OID 90863)
+-- Name: password_resets_token_index; Type: INDEX; Schema: public; Owner: postgres; Tablespace: 
+--
+
+CREATE INDEX password_resets_token_index ON password_resets USING btree (token);
+
+
+--
+-- TOC entry 2075 (class 1259 OID 16768)
+-- Name: radacct_active_user_idx; Type: INDEX; Schema: public; Owner: radius; Tablespace: 
+--
+
+CREATE INDEX radacct_active_user_idx ON radacct USING btree (username, nasipaddress, acctsessionid) WHERE (acctstoptime IS NULL);
+
+
+--
+-- TOC entry 2078 (class 1259 OID 16758)
+-- Name: radacct_start_user_idx; Type: INDEX; Schema: public; Owner: radius; Tablespace: 
+--
+
+CREATE INDEX radacct_start_user_idx ON radacct USING btree (acctstarttime, username);
+
+
+--
+-- TOC entry 2081 (class 1259 OID 16411)
+-- Name: radcheck_username; Type: INDEX; Schema: public; Owner: radius; Tablespace: 
+--
+
+CREATE INDEX radcheck_username ON radcheck USING btree (username, attribute);
+
+
+--
+-- TOC entry 2082 (class 1259 OID 16424)
+-- Name: radgroupcheck_groupname; Type: INDEX; Schema: public; Owner: radius; Tablespace: 
+--
+
+CREATE INDEX radgroupcheck_groupname ON radgroupcheck USING btree (groupname, attribute);
+
+
+--
+-- TOC entry 2085 (class 1259 OID 16437)
+-- Name: radgroupreply_groupname; Type: INDEX; Schema: public; Owner: radius; Tablespace: 
+--
+
+CREATE INDEX radgroupreply_groupname ON radgroupreply USING btree (groupname, attribute);
+
+
+--
+-- TOC entry 2096 (class 1259 OID 16500)
+-- Name: radippool_framedipaddress; Type: INDEX; Schema: public; Owner: radius; Tablespace: 
+--
+
+CREATE INDEX radippool_framedipaddress ON radippool USING btree (framedipaddress);
+
+
+--
+-- TOC entry 2097 (class 1259 OID 16501)
+-- Name: radippool_nasip_poolkey_ipaddress; Type: INDEX; Schema: public; Owner: radius; Tablespace: 
+--
+
+CREATE INDEX radippool_nasip_poolkey_ipaddress ON radippool USING btree (nasipaddress, pool_key, framedipaddress);
+
+
+--
+-- TOC entry 2100 (class 1259 OID 16499)
+-- Name: radippool_poolname_expire; Type: INDEX; Schema: public; Owner: radius; Tablespace: 
+--
+
+CREATE INDEX radippool_poolname_expire ON radippool USING btree (pool_name, expiry_time);
+
+
+--
+-- TOC entry 2090 (class 1259 OID 16450)
+-- Name: radreply_username; Type: INDEX; Schema: public; Owner: radius; Tablespace: 
+--
+
+CREATE INDEX radreply_username ON radreply USING btree (username, attribute);
+
+
+--
+-- TOC entry 2093 (class 1259 OID 16457)
+-- Name: radusergroup_username; Type: INDEX; Schema: public; Owner: radius; Tablespace: 
+--
+
+CREATE INDEX radusergroup_username ON radusergroup USING btree (username);
+
+
+--
+-- TOC entry 2136 (class 2620 OID 16737)
+-- Name: create_group; Type: TRIGGER; Schema: public; Owner: radius
+--
+
+CREATE TRIGGER create_group BEFORE INSERT ON bl_tariffs FOR EACH ROW EXECUTE PROCEDURE create_group_after_tariff();
+
+
+--
+-- TOC entry 2135 (class 2620 OID 16889)
+-- Name: disactive_raduser; Type: TRIGGER; Schema: public; Owner: radius
+--
+
+CREATE TRIGGER disactive_raduser AFTER UPDATE ON bl_users FOR EACH ROW EXECUTE PROCEDURE tr_disactive_raduser();
+
+
+--
+-- TOC entry 2132 (class 2620 OID 16890)
+-- Name: disconnect_user; Type: TRIGGER; Schema: public; Owner: radius
+--
+
+CREATE TRIGGER disconnect_user AFTER DELETE ON radcheck FOR EACH ROW EXECUTE PROCEDURE tr_disconnect_raduser();
+
+
+--
+-- TOC entry 2133 (class 2620 OID 16741)
+-- Name: raduser_after_user; Type: TRIGGER; Schema: public; Owner: radius
+--
+
+CREATE TRIGGER raduser_after_user AFTER INSERT ON bl_users FOR EACH ROW EXECUTE PROCEDURE create_raduser_after_user();
+
+
+--
+-- TOC entry 2131 (class 2620 OID 16779)
+-- Name: send_billing_data_to_user_tariff_history; Type: TRIGGER; Schema: public; Owner: radius
+--
+
+CREATE TRIGGER send_billing_data_to_user_tariff_history AFTER UPDATE ON radacct FOR EACH ROW EXECUTE PROCEDURE count_billing_data();
+
+
+--
+-- TOC entry 2134 (class 2620 OID 16755)
+-- Name: set_timestamp; Type: TRIGGER; Schema: public; Owner: radius
+--
+
+CREATE TRIGGER set_timestamp BEFORE INSERT OR UPDATE ON bl_users FOR EACH ROW EXECUTE PROCEDURE set_timestamp_final();
+
+
+--
+-- TOC entry 2137 (class 2620 OID 16756)
+-- Name: set_timestamp; Type: TRIGGER; Schema: public; Owner: radius
+--
+
+CREATE TRIGGER set_timestamp BEFORE INSERT OR UPDATE ON bl_tariffs FOR EACH ROW EXECUTE PROCEDURE set_timestamp_final();
+
+
+--
+-- TOC entry 2138 (class 2620 OID 16757)
+-- Name: set_timestamp; Type: TRIGGER; Schema: public; Owner: radius
+--
+
+CREATE TRIGGER set_timestamp BEFORE INSERT OR UPDATE ON bl_user_tariffs_history FOR EACH ROW EXECUTE PROCEDURE set_timestamp_final();
+
+
+--
+-- TOC entry 2139 (class 2620 OID 16886)
+-- Name: tr_disactiv_user; Type: TRIGGER; Schema: public; Owner: radius
+--
+
+CREATE TRIGGER tr_disactiv_user AFTER UPDATE ON bl_user_tariffs_history FOR EACH ROW EXECUTE PROCEDURE tr_change_user_status();
+
+
+--
+-- TOC entry 2128 (class 2606 OID 16729)
+-- Name: bl_user_tariffs_history_tariff_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: radius
+--
+
+ALTER TABLE ONLY bl_user_tariffs_history
+    ADD CONSTRAINT bl_user_tariffs_history_tariff_id_fkey FOREIGN KEY (tariff_id) REFERENCES bl_tariffs(id);
+
+
+--
+-- TOC entry 2127 (class 2606 OID 16724)
+-- Name: bl_user_tariffs_history_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: radius
+--
+
+ALTER TABLE ONLY bl_user_tariffs_history
+    ADD CONSTRAINT bl_user_tariffs_history_user_id_fkey FOREIGN KEY (user_id) REFERENCES bl_users(id);
+
+
+--
+-- TOC entry 2130 (class 2606 OID 33329)
+-- Name: rule; Type: FK CONSTRAINT; Schema: public; Owner: radius
+--
+
+ALTER TABLE ONLY bl_tariff_rule_link
+    ADD CONSTRAINT rule FOREIGN KEY (rule_id) REFERENCES bl_tariffs_rules(id);
+
+
+--
+-- TOC entry 2129 (class 2606 OID 33324)
+-- Name: tariff; Type: FK CONSTRAINT; Schema: public; Owner: radius
+--
+
+ALTER TABLE ONLY bl_tariff_rule_link
+    ADD CONSTRAINT tariff FOREIGN KEY (tariff_id) REFERENCES bl_tariffs(id);
+
+
+--
+-- TOC entry 2254 (class 0 OID 0)
+-- Dependencies: 6
+-- Name: public; Type: ACL; Schema: -; Owner: postgres
+--
+
+REVOKE ALL ON SCHEMA public FROM PUBLIC;
+REVOKE ALL ON SCHEMA public FROM postgres;
+GRANT ALL ON SCHEMA public TO postgres;
+GRANT ALL ON SCHEMA public TO PUBLIC;
+
+
+-- Completed on 2019-05-23 19:01:38 TJT
+
+--
+-- PostgreSQL database dump complete
+--
+
