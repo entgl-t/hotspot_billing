@@ -26,7 +26,12 @@ To setup client side captive portal one can refer to example below
 
 ![Alt text](/chilli_client_conf/LoginPage.png)
 
+### Usage:
 
-## Resources:
+If you find the code useful for your own projects, please cite this repository.
+
+
+## References:
 - https://freeradius.org/documentation
 - http://www.chillispot.org
+--
