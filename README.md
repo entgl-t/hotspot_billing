@@ -4,7 +4,7 @@ Hotspot Billing System
 The Hotspot billing system was designed to provide metered Internet access and charge users in real time.
 The software interface with networking equipment to collect usage data and to control Internet access. 
 Wi-Fi hotspot billing system based on Chillispot open source captive portal with RADIUS AAA-protocol .
-Server part run on Linux. PostgreSQL DBMS is used to store data and stored procedures.
+Server part runs on Linux. PostgreSQL DBMS is used to store data and stored procedures.
 
 Requirements
 -------------
